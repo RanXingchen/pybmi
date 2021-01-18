@@ -13,9 +13,9 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
     Parameters
     ----------
     x : array_like
-        A discrete-time signal, the size of x is [C, T], where C means the
-        channels of the signal, and T means the time points of samples.
-        If x is a vector with [T,] shape, it is converted to [1, T] and treated
+        A discrete-time signal, the size of x is [T, C], where T means the
+        time points of samples, and  C means the channels of the signal.
+        If x is a vector with [T,] shape, it is converted to [T, 1] and treated
         as singal channel.
     NW : float, optional
         The "time-bandwidth product" for the discrete prolate spheroidal sequences
@@ -68,9 +68,9 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
 
     # Convert 1D vectors to 2D with one channel.
     if len(x.shape) == 1:
-        x = x[np.newaxis, :]
+        x = x[:, np.newaxis]
     # Get the number of channels and sample points.
-    C, N = x.shape
+    N, C = x.shape
 
     # Compute discrete prolate spheroidal sequences
     [E, V] = dpss(N, NW)
@@ -89,7 +89,7 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
         fs = 2 * math.pi
 
     # Compute power spectrum via MTM.
-    S = np.concatenate([_mtm_spectrum(i, nfft, E, V, method=method) for i in x])
+    S = np.concatenate([_mtm_spectrum(x[:, i], nfft, E, V, method=method) for i in range(C)])
     # Compute PSD frequency vector
     w = psdfreqvec(npts=nfft, fs=fs)
 
@@ -129,7 +129,7 @@ def _mtm_spectrum(x, NFFT, E, V, method='adapt'):
 
     # Compute DFT using FFT
     Sk_complex = scipy.fft.fft(E.T * x, NFFT)
-    Sk = abs(Sk_complex) ** 2   # Shape: [K, N]
+    Sk = abs(Sk_complex) ** 2   # Shape: [K, NFFT]
 
     # Compute the MTM spectral estimates, compute the whole spectrum 0:nfft.
     if method in ['eigen', 'unity']:
