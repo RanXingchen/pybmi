@@ -8,7 +8,8 @@ from .computepsd import compute_psd
 
 def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
     """
-    Power Spectral Density (PSD) estimate via the Thomson multitaper method (MTM).
+    Power Spectral Density (PSD) estimate via the Thomson multitaper
+    method (MTM).
 
     Parameters
     ----------
@@ -18,22 +19,24 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
         If x is a vector with [T,] shape, it is converted to [T, 1] and treated
         as singal channel.
     NW : float, optional
-        The "time-bandwidth product" for the discrete prolate spheroidal sequences
-        (or Slepian sequences) used as data windows.
+        The "time-bandwidth product" for the discrete prolate spheroidal
+        sequences (or Slepian sequences) used as data windows.
         Typical choices for NW are 2, 5/2, 3, 7/2, or 4. Default: 4
     nfft : int, optional
         Specifies the FFT length used to calculate the PSD estimates.
         For real X, Pxx has (nfft / 2 + 1) columns if nfft is even,
-        and (nfft + 1) / 2 columns if nfft is odd. For complex X, Pxx always has length nfft.
-        If nfft is specified as empty, nfft is set to either 256 or
-        the next power of 2 greater than the length of X, whichever is larger.
+        and (nfft + 1) / 2 columns if nfft is odd. For complex X, Pxx always
+        has length nfft. If nfft is specified as empty, nfft is set to either
+        256 or the next power of 2 greater than the length of X, whichever
+        is larger.
     fs : int, optional
-        The sampling frequency specified in hertz. If fs is empty, it defaults to 1 Hz.
+        The sampling frequency specified in hertz. If fs is empty, it defaults
+        to 1 Hz.
     dlt : bool, optional
         Specifies whether drop the last taper.
-        By default, it's true because the last taper's corresponding eigenvalue is
-        significantly smaller than 1. Therefore, The number of tapers used to form
-        Pxx is 2 * NW - 1.
+        By default, it's true because the last taper's corresponding
+        eigenvalue is significantly smaller than 1. Therefore, The number
+        of tapers used to form Pxx is 2 * NW - 1.
     method : str, optional
         The method used for combining the individual spectral estimates:
         'adapt' - Thomson's adaptive non-linear combination (default)
@@ -75,7 +78,9 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
     # Compute discrete prolate spheroidal sequences
     [E, V] = dpss(N, NW)
     if dlt:
-        assert len(V) > 2, 'Drop the last taper must satisfied the number of tapers larger than 2!'
+        assert len(V) > 2, \
+            'Drop the last taper must satisfied the '\
+            'number of tapers larger than 2!'
         E, V = E[:, :-1], V[:-1]
     else:
         assert len(V) > 1, 'The number of tapers should larger than 1!'
@@ -89,7 +94,9 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
         fs = 2 * math.pi
 
     # Compute power spectrum via MTM.
-    S = np.concatenate([_mtm_spectrum(x[:, i], nfft, E, V, method=method) for i in range(C)])
+    S = np.concatenate(
+        [_mtm_spectrum(x[:, i], nfft, E, V, method=method) for i in range(C)]
+    )
     # Compute PSD frequency vector
     w = psdfreqvec(npts=nfft, fs=fs)
 
@@ -162,6 +169,7 @@ def _mtm_spectrum(x, NFFT, E, V, method='adapt'):
             b = S / (np.dot(V, S) + a)
             # calculate new spectral estimate
             wk = (b ** 2) * V
-            S1 = np.sum(wk * Sk, axis=0, keepdims=True) / np.sum(wk, axis=0, keepdims=True)
+            S1 = np.sum(wk * Sk, axis=0, keepdims=True) / \
+                np.sum(wk, axis=0, keepdims=True)
             S, S1 = S1, S  # swap S and S1
     return S

@@ -1,3 +1,6 @@
+from dateutil.parser import parse
+
+
 def check_params(candidate, choices, arg_name):
     """
     Check validation of input argument from a finite set of choices.
@@ -31,3 +34,48 @@ def check_params(candidate, choices, arg_name):
 
     selected = candidate
     return selected
+
+
+def npc_remove(x, npc=b'\x00', code='utf8'):
+    """
+    Decoding input bytes x with code and remove
+    non-printable character from it.
+
+    Parameters
+    ----------
+    x : bytes
+        The input data need to remove some non-printable character.
+    npc : bytes, optional
+        The target non-printable character will be removed. Default: b'\x00'.
+    code : str, optional
+        The performed decode type, default vaule is 'utf8'.
+
+    Returns
+    -------
+    The decoded data of x which removed the NPCs.
+    """
+    return x.decode(code).strip(npc.decode(code))
+
+
+def is_date(string, fuzzy=False):
+    """
+    Return whether the string can be interpreted as a date.
+
+    Parameters
+    ----------
+    string: str
+        String to check for date.
+    fuzzy: bool, optional
+        Ignore unknown tokens in string if True
+
+    Returns
+    -------
+    Return True if the string can be interpreted as date,
+    otherwise return False.
+    """
+
+    try:
+        parse(string, fuzzy=fuzzy)
+        return True
+    except ValueError:
+        return False
