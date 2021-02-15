@@ -2,9 +2,11 @@ import matlab.engine
 import numpy as np
 import os
 import scipy.io as scio
+import tkinter
 
 from Signal.Spectrogram import pmtm
 from joblib import Parallel, delayed
+from tkinter import filedialog
 
 
 class LFPReader():
@@ -61,10 +63,14 @@ class LFPReader():
             frequency bands, it should be
             [number of bins, channels, number of frequency bands]
         """
+        # Hidden the main window of Tk.
+        tkinter.Tk().withdraw()
         # Popup the Open File UI. Get the file name and path.
-        fname, path = self.eng.getFile(
-            '*.*', 'Choose a neural data file...', nargout=2
+        filepath = filedialog.askopenfilename(
+            title="Choose a neural data file...",
+            filetypes=(("MATLAB data file", "*.mat"), ("all files", "*.*"))
         )
+        path, fname = os.path.split(filepath)
         # File extension used as the sambol. If it's 'mat', load the
         # lfp directly; if it's NSx, the LFP need computed from the
         # raw data, which may cost lots of time.
