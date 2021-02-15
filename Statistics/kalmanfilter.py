@@ -80,6 +80,8 @@ class KalmanFilter():
     def __init__(self, Z, X, eps=None):
         assert X.shape[0] == Z.shape[0], \
             'The state and measurement should have same number of time points!'
+        if eps is None:
+            eps = np.sqrt(np.finfo(X.dtype).eps)
 
         t, m = X.shape
 
