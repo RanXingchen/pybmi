@@ -40,9 +40,9 @@ class LFPReader():
 
         Parameters
         ----------
-        freq_bands : {list, tuple, ndarray}, optional
+        freq_bands : {list, tuple, ndarray}
             The frequency bands desired.
-        bin_size : float, optional
+        bin_size : float
             Bin size specified the length of the neural data used to
             compute the LFP. A larger bin size can get more accurate LFP,
             but less online compitiable. Unit: seconds.
