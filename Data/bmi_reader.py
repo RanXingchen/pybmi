@@ -37,6 +37,14 @@ class BMIReader():
         the raw data, e.g., success rate, number of trials count. The
         stat dict contain these statistics information for supported
         BCI paradigm.
+
+    Examples
+    --------
+    >>> path = 'MonkeyData\\201907031450.bmi'
+    >>> reader = BMIReader(path, report=True)
+    >>> bmi = reader.read(bin_size=0.1, columns=6, analyze=False)
+    >>> reader.analysis(verbose=True)
+    >>> masked, index = reader.filter((1, 4))
     """
     def __init__(self, path, report=False):
         # Supported file version.

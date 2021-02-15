@@ -26,6 +26,13 @@ class LFPReader():
     njobs : int, optional
         NJOBS define how many workers processes parallelly to calculate
         the LFP.
+
+    Examples
+    --------
+    >>> freq_bands = [[0, 10], [10, 20], [20, 30], [100, 200], [200, 400]]
+    >>> bin_size = 0.1
+    >>> reader = LFPReader(nfft=2048, njobs=12)
+    >>> lfp = reader.read(freq_bands, bin_size)
     """
     def __init__(self, matlab_package_path='../../MATLAB',
                  nw=2.5, nfft=1024, njobs=1):
