@@ -1,4 +1,3 @@
-import matlab.engine
 import numpy as np
 import os
 import scipy.io as scio
@@ -7,17 +6,17 @@ import tkinter
 from Signal.Spectrogram import pmtm
 from joblib import Parallel, delayed
 from tkinter import filedialog
+from .brPY.brpylib import NsxFile
 
 
 class LFPReader():
     """
-    Use MATLAB eigen calling NPMK toolkit provided by Blackrock Microsystems.
-    Reading NSx neural data files and preprocess it to LFP data.
+    Use brPY toolkit provided by Blackrock Microsystems. Reading NSx
+    neural data files and preprocess it to LFP data. Be note that the
+    value the brPY get is in unit of uV. It is 1/4 of the raw values.
 
     Parameters
     ----------
-    matlab_package_path : str, optional
-        The file path that contain the NPMK toolkit.
     nw : float, optional
         The "time-bandwidth product" for the DPSS used as data windows.
         Typical choices are 2, 5/2, 3, 7/2, or 4.
@@ -32,18 +31,14 @@ class LFPReader():
     >>> freq_bands = [[0, 10], [10, 20], [20, 30], [100, 200], [200, 400]]
     >>> bin_size = 0.1
     >>> reader = LFPReader(nfft=2048, njobs=12)
-    >>> lfp = reader.read(freq_bands, bin_size)
+    >>> lfp, timestamp = reader.read(freq_bands, bin_size)
     """
-    def __init__(self, matlab_package_path='../../MATLAB',
-                 nw=2.5, nfft=1024, njobs=1):
-        self.eng = matlab.engine.start_matlab()
-        # The MATLAB code package should be contained to read NSx files.
-        self.eng.addpath(self.eng.genpath(matlab_package_path))
+    def __init__(self, nw=2.5, nfft=1024, njobs=1):
         self.nw = nw
         self.nfft = nfft
         self.njobs = njobs
 
-    def read(self, freq_bands, bin_size, save_mat=True):
+    def read(self, freq_bands, bin_size, timeres=30000, save_mat=True):
         """
         Reading the Neural data either MAT format or NSx format.
 
@@ -55,6 +50,8 @@ class LFPReader():
             Bin size specified the length of the neural data used to
             compute the LFP. A larger bin size can get more accurate LFP,
             but less online compitiable. Unit: seconds.
+        timeres : scalar, optional
+            Time resolution of NSP recording. Default: 30000.
         save_mat : bool, optional
             Choose whether need to save processed LFP as a mat file. Consider
             the time-consuming of calculating LFP from NSx, saving the LFP to
@@ -69,6 +66,10 @@ class LFPReader():
             if reshape the LFP to split the channels and number of
             frequency bands, it should be
             [number of bins, channels, number of frequency bands]
+        timestamp : ndarray
+            The timestamp calculated according the start recording time
+            and sampling frequency. The output timestamp is downsamped
+            by the bin size.
         """
         # Hidden the main window of Tk.
         tkinter.Tk().withdraw()
@@ -85,23 +86,33 @@ class LFPReader():
 
         if ext == 'mat':
             # Load already processed LFP.
-            lfp = scio.loadmat(os.path.join(path, fname))['LFP']
+            data = scio.loadmat(filepath)
+            lfp, timestamp = data['LFP'], data['timestamp']
         elif 'ns' in ext:
-            # Read raw data of NSx from matlab
-            meta_tags, data, raw_data, electrodes_info = \
-                self.eng.openNSxPythonWrapper(
-                    True, True, os.path.join(path, fname), nargout=4
-                )
-            # Fast convertion from Matlab matrix to ndarray.
-            # https://stackoverflow.com/questions/34155829
-            data = np.array(data._data,
-                            dtype=np.float64).reshape(data.size, order='F').T
+            # Read raw data of NSx
+            nsx_file = NsxFile(filepath)
+            raw_data = nsx_file.getdata()
+            # Close nsx file
+            nsx_file.close()
+            # The data part and header part.
+            data = raw_data['data'].T
+            header = raw_data['data_headers'][0]
             # Useful recording parameters of neural data.
-            fs = int(meta_tags['SamplingFreq'])
+            fs = int(raw_data['samp_per_s'])
+            ts = int(header['Timestamp'])
             step_size = int(fs * bin_size)
+            # Calculate the timestep of raw data.
+            timestamp = np.linspace(
+                ts, data.shape[0] - 1, num=data.shape[0], dtype=np.int
+            ) * (timeres / fs)
 
             # Computing LFP from the raw data.
             lfp = self._compute_lfp(data, step_size, freq_bands, fs)
+            # Get the timestamp of LFP
+            timestamp = timestamp[0::step_size]
+            # Check if both have same length
+            if lfp.shape[0] < timestamp.shape[0]:
+                timestamp = timestamp[:lfp.shape[0]]
 
             # Because the processing cost time, save the processed LFP as
             # a mat file by default, convenient next time calling.
@@ -110,10 +121,13 @@ class LFPReader():
                 for s in fname.split('.')[:-1]:
                     save_name += (s + '.')
                 save_name += 'mat'
-                scio.savemat(os.path.join(path, save_name), {'LFP': lfp})
+                scio.savemat(
+                    os.path.join(path, save_name),
+                    {'LFP': lfp, 'timestamp': timestamp}
+                )
         else:
             raise Exception('Unknown file type!')
-        return lfp
+        return lfp, timestamp
 
     def _compute_lfp(self, x, step, freq_bands, fs):
         N, C = x.shape  # [Number of samples, Number of Channel]
