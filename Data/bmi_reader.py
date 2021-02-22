@@ -2,8 +2,10 @@ import os
 import numpy as np
 import array
 import time
+import tkinter
 
 from Utils.utils import npc_remove, check_params
+from tkinter import filedialog
 
 
 class BMIReader():
@@ -12,8 +14,9 @@ class BMIReader():
 
     Parameters
     ----------
-    path : str
-        The path of bmi file which will be readed.
+    filepath : str
+        The path of bmi file which will be readed. If it is None, a UI will
+        pop out to ask user select one file.
     report : bool, optional
         To print a log on the terminal which contain the basic
         information of the readed BMI files, e.g., the header, file size,
@@ -46,17 +49,26 @@ class BMIReader():
     >>> reader.analysis(verbose=True)
     >>> masked, index = reader.filter((1, 4))
     """
-    def __init__(self, path, report=False):
+    def __init__(self, filepath=None, report=False):
         # Supported file version.
         self.version_list = ['v1.0', 'v1.1', 'v1.2']
         self.report = report
 
-        assert os.path.exists(path), \
-            'The provided file \'' + path + '\' does not exist!'
+        if filepath is None:
+            # Hidden the main window of Tk.
+            tkinter.Tk().withdraw()
+            # Popup the Open File UI. Get the file name and path.
+            filepath = filedialog.askopenfilename(
+                title="Choose a behavior data file...",
+                filetypes=(("BMI files", "*.bmi"), ("all files", "*.*"))
+            )
+
+        assert os.path.exists(filepath), \
+            'The provided file \'' + filepath + '\' does not exist!'
 
         # Initialize the file information.
-        self.file_size = os.path.getsize(path)
-        self.file_path, self.file_name = os.path.split(path)
+        self.file_size = os.path.getsize(filepath)
+        self.path, self.name = os.path.split(filepath)
         self.header = {
             'version':      'Unknown',
             'subject':      'Unknown',
@@ -152,7 +164,7 @@ class BMIReader():
 
         tic = time.time()
         # Reading BMI files.
-        with open(os.path.join(self.file_path, self.file_name), 'rb') as f:
+        with open(os.path.join(self.path, self.name), 'rb') as f:
             # Checking the possible version of the file.
             version = npc_remove(f.read(32), npc=b'\x00')
 
@@ -371,7 +383,7 @@ class BMIReader():
         data_points = data_size // (8 * data_cols)
         assert data_points * 8 * data_cols == data_size, \
             'Reading BMI file \'' + \
-            os.path.join(self.file_path, self.file_name) + '\' failed.' \
+            os.path.join(self.path, self.name) + '\' failed.' \
             f'The data size is not divisible by data columns {data_cols}.'
 
         # Reading the file data
@@ -461,9 +473,9 @@ class BMIReader():
 
     def _report_info(self, data_points, duration, t1, t2, analyze=True):
         print('*** FILE INFO **************************')
-        print('File Path\t= ' + self.file_path)
-        print('File Name\t= ' + self.file_name)
-        print('File Extension\t= ' + self.file_name.split('.')[-1])
+        print('File Path\t= ' + self.path)
+        print('File Name\t= ' + self.name)
+        print('File Extension\t= ' + self.name.split('.')[-1])
         print('File Version\t= ' + self.header['version'])
         print(f'Duration\t= {duration[0]:.0f}m {duration[1]:.0f}s')
         print('Data Points\t= ' + str(data_points))
