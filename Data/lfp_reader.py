@@ -17,6 +17,9 @@ class LFPReader():
 
     Parameters
     ----------
+    filepath : string, optional
+        File path to loading the neural data. If it is None, a UI will
+        pop out to ask user select one file.
     nw : float, optional
         The "time-bandwidth product" for the DPSS used as data windows.
         Typical choices are 2, 5/2, 3, 7/2, or 4.
@@ -33,10 +36,11 @@ class LFPReader():
     >>> reader = LFPReader(nfft=2048, njobs=12)
     >>> lfp, timestamp = reader.read(freq_bands, bin_size)
     """
-    def __init__(self, nw=2.5, nfft=1024, njobs=1):
+    def __init__(self, filepath=None, nw=2.5, nfft=1024, njobs=1):
         self.nw = nw
         self.nfft = nfft
         self.njobs = njobs
+        self.filepath = filepath
 
     def read(self, freq_bands, bin_size, timeres=30000, save_mat=True):
         """
@@ -71,14 +75,20 @@ class LFPReader():
             and sampling frequency. The output timestamp is downsamped
             by the bin size.
         """
-        # Hidden the main window of Tk.
-        tkinter.Tk().withdraw()
-        # Popup the Open File UI. Get the file name and path.
-        filepath = filedialog.askopenfilename(
-            title="Choose a neural data file...",
-            filetypes=(("MATLAB data file", "*.mat"), ("all files", "*.*"))
-        )
-        path, fname = os.path.split(filepath)
+        if self.filepath is None:
+            # Hidden the main window of Tk.
+            tkinter.Tk().withdraw()
+            # Popup the Open File UI. Get the file name and path.
+            self.filepath = filedialog.askopenfilename(
+                title="Choose a neural data file...",
+                filetypes=(("MATLAB data file", "*.mat"),
+                           ("NS3 files", "*.ns3"),
+                           ("all files", "*.*"))
+            )
+        assert os.path.exists(self.filepath), \
+            'The provided file \'' + self.filepath + '\' does not exist!'
+
+        path, fname = os.path.split(self.filepath)
         # File extension used as the sambol. If it's 'mat', load the
         # lfp directly; if it's NSx, the LFP need computed from the
         # raw data, which may cost lots of time.
@@ -86,11 +96,11 @@ class LFPReader():
 
         if ext == 'mat':
             # Load already processed LFP.
-            data = scio.loadmat(filepath)
+            data = scio.loadmat(self.filepath)
             lfp, timestamp = data['LFP'], data['timestamp']
         elif 'ns' in ext:
             # Read raw data of NSx
-            nsx_file = NsxFile(filepath)
+            nsx_file = NsxFile(self.filepath)
             raw_data = nsx_file.getdata()
             # Close nsx file
             nsx_file.close()
