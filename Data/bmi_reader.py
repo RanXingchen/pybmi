@@ -279,17 +279,23 @@ class BMIReader():
         if verbose:
             self._print_stat()
 
-    def filter(self, label):
+    def filter(self, label, data=None):
         """
-        Mask out specified trial type from readed data. The rest trials
+        Mask out specified trial type from data. The rest trials
         will concatenate one by one to form a new data.
 
         Parameters
         ----------
-        label: tuple
-            The labels of the kind of trial will be masked out. Labels need
-            be a tuple which specified the trial start and trial end label
-            number.
+        label : {tuple, int}
+            The labels of the kind of trial will be masked out. If the
+            given labels are tuple, means that it specified one kind of
+            trial with its start and end label number. If the given
+            label is int, means that this kind of label will be removed
+            in all trials, no matter what kind of trial (success, failure)
+            it is.
+        data : ndarray, optional
+            Specify the data to perform the filter operation. If None, use
+            readed binned data as the object.
 
         Returns
         -------
@@ -302,26 +308,33 @@ class BMIReader():
         version = self.header['version']
         # The index of the labels in each row.
         j = self.id_label[version]
-        # The label indicate trial start and trial end of masked out
-        # trail type.
-        l1, l2 = label
-        index = np.ones(self.data.shape[0], dtype=np.bool)
+        # If not specify the data, use the binned data from BMI file.
+        if data is None:
+            data = self.data
+        if isinstance(label, tuple):
+            # The tuple type label indicate trial start and
+            # trial end of masked out trail type.
+            l1, l2 = label
 
-        for i, row in enumerate(self.data):
-            if i == 0:
-                trial_start, trial_end = 0, 0
-                continue
+            index = np.ones(data.shape[0], dtype=np.bool)
 
-            if row[j] == l1 and self.data[i - 1, j] != l1:
-                trial_start = i
-            elif row[j] == l2 and self.data[i + 1, j] != l2:
-                trial_end = i
+            for i, row in enumerate(data):
+                if i == 0:
+                    trial_start, trial_end = 0, 0
+                    continue
 
-            # End of one whole trial
-            if trial_start < trial_end:
-                index[trial_start:trial_end + 1] = False
+                if row[j] == l1 and data[i - 1, j] != l1:
+                    trial_start = i
+                elif row[j] == l2 and data[i + 1, j] != l2:
+                    trial_end = i
 
-        masked = self.data[index]
+                # End of one whole trial
+                if trial_start < trial_end:
+                    index[trial_start:trial_end + 1] = False
+        elif isinstance(label, int):
+            index = ~(data[:, j] == label)
+
+        masked = data[index]
         return masked, index
 
     def _default_reading(self, f, columns):
