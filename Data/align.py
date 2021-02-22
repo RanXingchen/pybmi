@@ -37,29 +37,37 @@ def align(x, y, timestamp_x=None, timestamp_y=None, inc=3000):
     """
     T1, T2 = x.shape[0], y.shape[0]
 
-    # If timestamp x is None, then we assume the timestamp x
-    # start at step 0.
+    # If timestamp is None, then we assume the timestamp start at step 0.
     if timestamp_x is None:
         timestamp_x = np.linspace(0, T1 - 1, T1, dtype=np.int) * inc
     if timestamp_y is None:
         timestamp_y = np.linspace(0, T2 - 1, T2, dtype=np.int) * inc
 
-    # Make sure the shape of timestamp x and timestamp y like (T, 1)
-    timestamp_x = np.reshape(timestamp_x, (-1, 1))
-    timestamp_y = np.reshape(timestamp_y, (-1, 1))
+    # Make sure the shape of timestamp x and timestamp y like (T,)
+    timestamp_x = np.reshape(timestamp_x, (-1,))
+    timestamp_y = np.reshape(timestamp_y, (-1,))
 
-    assert timestamp_x.shape[0] == T1, \
+    assert len(timestamp_x) == T1, \
         f'Shape error occured! The length of timestamp x should be {T1}.'
-    assert timestamp_y.shape[0] == T2, \
+    assert len(timestamp_y) == T2, \
         f'Shape error occured! The length of timestamp y should be {T2}.'
 
-    start_x = int(timestamp_x[0, 0] // inc)
-    start_y = int(timestamp_y[0, 0] // inc)
+    ix = np.round(timestamp_x[0] / inc).astype(np.int)
+    iy = np.round(timestamp_y[0] / inc).astype(np.int)
 
-    start = max(start_x, start_y)
+    start = max(ix, iy)
     count = min(T1, T2)
+    # Check if both ends of timestamp of x and y are equal.
+    ts_x = (timestamp_x[start - ix], timestamp_x[start - ix + count - 1])
+    ts_y = (timestamp_y[start - iy], timestamp_y[start - iy + count - 1])
+    if abs(ts_x[0] - ts_y[0]) >= inc:
+        print('\nWARNING: The difference of start timestamp of x and y'
+              f'are greater than step size: abs({ts_x[0]}-{ts_y[0]})>={inc}')
+    if abs(ts_x[1] - ts_y[1]) >= inc:
+        print('\nWARNING: The difference of end timestamp of x and y'
+              f'are greater than step size: abs({ts_x[1]}-{ts_y[1]})>={inc}')
 
     # Cut the data x and y
-    x = x[start - start_x:start - start_x + count]
-    y = y[start - start_y:start - start_y + count]
+    x = x[start - ix:start - ix + count]
+    y = y[start - iy:start - iy + count]
     return x, y
