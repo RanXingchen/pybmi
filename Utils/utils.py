@@ -1,4 +1,7 @@
 from dateutil.parser import parse
+import matlab
+import matlab.engine
+import numpy as np
 
 
 def check_params(candidate, choices, arg_name):
@@ -79,3 +82,49 @@ def is_date(string, fuzzy=False):
         return True
     except ValueError:
         return False
+
+
+class Array2mat():
+    """
+    Convert numpy ndarray to matlab matrix.
+    For now, it's only support 1D or 2D numpy array or python list.
+
+    Parameters
+    ----------
+    x : list or ndarray
+        The numpy ndarray that contain values, which data type must be
+        float. If not, it will be cast to float automaticly.
+    """
+    def __init__(self):
+        self.eng = matlab.engine.start_matlab()
+
+    def __call__(self, x):
+        if type(x) == list:
+            x = np.array(x)
+        # Check the type of x is validate.
+        assert type(x) == np.ndarray, \
+            'Wrong type of input: ' + str(type(x)) + '.'
+        # Make sure the dimension of x is not greater than 2
+        D = len(x.shape)
+        assert D <= 2, f'{D}D array is not supported for now!'
+        # Convert the vector to row vectors.
+        if D == 1 or x.shape[1] == 1:
+            x = np.reshape(x, (1, -1))
+        if x.dtype != np.float:
+            x = x.astype(np.float)
+
+        # Initialize the mat matrix.
+        mat = matlab.double([])
+        # Make sure the row of x is smaller when doing for loop.
+        transposed = False
+        if x.shape[0] > x.shape[1]:
+            transposed = True
+            x = x.T
+        # Transform the array.
+        for vec in x:
+            tmp = self.eng.cell2mat(vec.tolist())
+            mat = self.eng.cat(1, mat, tmp)
+        # Inverse transpose the mat
+        if transposed:
+            mat = self.eng.transpose(mat)
+        return mat
