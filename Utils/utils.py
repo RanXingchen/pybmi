@@ -2,6 +2,7 @@ from dateutil.parser import parse
 import matlab
 import matlab.engine
 import numpy as np
+import torch
 
 
 def check_params(candidate, choices, arg_name):
@@ -91,7 +92,7 @@ class Array2mat():
 
     Parameters
     ----------
-    x : list or ndarray
+    x : list or ndarray or tensor
         The numpy ndarray that contain values, which data type must be
         float. If not, it will be cast to float automaticly.
     """
@@ -101,6 +102,8 @@ class Array2mat():
     def __call__(self, x):
         if type(x) == list:
             x = np.array(x)
+        elif type(x) == torch.Tensor:
+            x = x.numpy() if x.device == 'cpu' else x.cpu().numpy()
         # Check the type of x is validate.
         assert type(x) == np.ndarray, \
             'Wrong type of input: ' + str(type(x)) + '.'
