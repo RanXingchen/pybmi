@@ -56,15 +56,16 @@ def align(x, y, timestamp_x=None, timestamp_y=None, inc=3000):
     iy = np.round(timestamp_y[0] / inc).astype(np.int)
 
     start = max(ix, iy)
-    count = min(T1, T2)
+    # Make sure the count is under the bounds of both x and y.
+    count = min(min(min(T1, T2), T1 - (start - ix)), T2 - (start - iy))
     # Check if both ends of timestamp of x and y are equal.
     ts_x = (timestamp_x[start - ix], timestamp_x[start - ix + count - 1])
     ts_y = (timestamp_y[start - iy], timestamp_y[start - iy + count - 1])
     if abs(ts_x[0] - ts_y[0]) >= inc:
-        print('\nWARNING: The difference of start timestamp of x and y'
+        print('\nWARNING: The difference of start timestamp of x and y '
               f'are greater than step size: abs({ts_x[0]}-{ts_y[0]})>={inc}')
     if abs(ts_x[1] - ts_y[1]) >= inc:
-        print('\nWARNING: The difference of end timestamp of x and y'
+        print('\nWARNING: The difference of end timestamp of x and y '
               f'are greater than step size: abs({ts_x[1]}-{ts_y[1]})>={inc}')
 
     # Cut the data x and y
