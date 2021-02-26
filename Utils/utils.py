@@ -113,18 +113,8 @@ class Array2mat():
         if x.dtype != np.float:
             x = x.astype(np.float)
 
-        # Initialize the mat matrix.
-        mat = matlab.double([])
-        # Make sure the row of x is smaller when doing for loop.
-        transposed = False
-        if x.shape[0] > x.shape[1]:
-            transposed = True
-            x = x.T
         # Transform the array.
-        for vec in x:
-            tmp = self.eng.cell2mat(vec.tolist())
-            mat = self.eng.cat(1, mat, tmp)
-        # Inverse transpose the mat
-        if transposed:
-            mat = self.eng.transpose(mat)
+        mat = self.eng.cell2mat(np.reshape(x, -1, order='F').tolist())
+        # Get the right shape of mat
+        mat = self.eng.reshape(mat, x.shape[0], x.shape[1])
         return mat
