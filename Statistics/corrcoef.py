@@ -16,11 +16,11 @@ def corrcoef(X, Y=None, alpha=0.05, rows='all'):
 
     Parameters
     ----------
-    X : ndarray
+    X : ndarray or tensor
         When Y is None, the input X should be a matrix, where each
         row is an observation and each column is a variable. While
         Y is not None, both X and Y should be column vectors.
-    Y : ndarray, optional
+    Y : ndarray or tensor, optional
         When Y is provided, X and Y need to be column vectors,
         otherwise, this function converts X and Y to it. CORRCOEF(X, Y)
         is equivalent to CORRCOEF(torch.cat([X, Y], dim=1)).
@@ -37,9 +37,9 @@ def corrcoef(X, Y=None, alpha=0.05, rows='all'):
 
     Returns
     -------
-    r : ndarray
+    r : tensor
         The calculated correlation coefficient of each column of X and Y.
-    p : ndarray
+    p : tensor
         A matrix of p-values for testing the hypothesis of no correlation.
         Each p-value is the probability of getting a correlation as large
         as the observed value by random chance, when the true correlation
