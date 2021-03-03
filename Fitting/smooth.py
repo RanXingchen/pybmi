@@ -1,6 +1,6 @@
 import numpy as np
 
-from Utils.utils import check_params
+from pybmi.utils.utils import check_params
 
 
 class Smooth():

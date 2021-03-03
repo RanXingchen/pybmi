@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from Utils.utils import check_params
+from pybmi.utils.utils import check_params
 from .statistics import wnanmean, wnanvar
 
 

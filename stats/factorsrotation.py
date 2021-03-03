@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.linalg import null_space
 
-from Utils.utils import check_params
+from pybmi.utils.utils import check_params
 
 
 class RotateFactors():

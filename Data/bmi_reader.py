@@ -4,7 +4,7 @@ import array
 import time
 import tkinter
 
-from Utils.utils import npc_remove, check_params
+from pybmi.utils.utils import npc_remove, check_params
 from tkinter import filedialog
 
 

@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from Utils.utils import check_params
+from pybmi.utils.utils import check_params
 
 
 def cov(x, y=None, biased=False, nanflag='includenan'):

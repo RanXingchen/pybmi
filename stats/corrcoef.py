@@ -2,8 +2,8 @@ import torch
 import numpy as np
 import math
 
-from Utils.utils import check_params
-from SpecialFunc.ibeta import ibeta
+from pybmi.utils.utils import check_params
+from pybmi.specialFunc.ibeta import ibeta
 from .cov import cov
 
 

@@ -3,7 +3,7 @@ import os
 import scipy.io as scio
 import tkinter
 
-from Signal.Spectrogram import pmtm
+from pybmi.signal.spectrogram import pmtm
 from joblib import Parallel, delayed
 from tkinter import filedialog
 from .brPY.brpylib import NsxFile
