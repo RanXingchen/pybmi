@@ -146,7 +146,7 @@ class LFPReader():
         n_bands = len(freq_bands)
 
         # MTM PSD estimation.
-        r = Parallel(n_jobs=self.njobs)(delayed(pmtm.pmtm)(
+        r = Parallel(n_jobs=self.njobs)(delayed(pmtm)(
             x[n * step:(n + 1) * step], NW=self.nw, nfft=self.nfft, fs=fs)
             for n in range(n_bins)
         )
