@@ -165,6 +165,7 @@ class KalmanFilter():
             residual = torch.matmul(self.H.matmul(Pt), self.H.T) + self.Q
             Kt = torch.matmul(Pt.matmul(self.H.T), torch.pinverse(residual))
             # Update the estimation by measurement.
+            # * Do not use inplace operation.
             xt = xt + torch.matmul(Kt, zt.T - torch.matmul(self.H, xt.T)).T
             Pt = Pt - torch.matmul(torch.matmul(Kt, self.H), Pt)
 
