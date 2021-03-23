@@ -103,6 +103,7 @@ class BMIReader():
         # The finish label of one trial, first one represent success label,
         # the second one represent failure label.
         self.finish_labels = {
+            'v1.2': [4, 5],
             'Unknown': [3, 4],
             # TODO: 不记得标签了，等有了对应版本的数据再加吧。
         }
@@ -169,14 +170,17 @@ class BMIReader():
             version = npc_remove(f.read(32), npc=b'\x00')
 
             # Process different version of BMI files.
-            if version.lower == self.version_list[0]:
+            if version.lower() == self.version_list[0]:
                 print("Not implement yet.")
-            elif version.lower == self.version_list[1]:
+                return 0
+            elif version.lower() == self.version_list[1]:
                 print("Not implement yet.")
-            elif version.lower == self.version_list[2]:
-                print("Not implement yet.")
+                return 0
+            elif version.lower() == self.version_list[2]:
+                # v1.2
+                self.rawdata, data_points = self._v1dot2_reading(f)
             else:
-                # Unsupported file version. Perform default reading process.
+                # Unknown file version. Perform default reading process.
                 self.rawdata, data_points = self._default_reading(f, columns)
                 # TODO: convert the unsupported file version to latest version.
         toc = time.time()
@@ -277,12 +281,19 @@ class BMIReader():
             # Finish checking the whole data one by one
             self.stat['success_rate'] = \
                 self.stat['num_success'] / self.stat['num_trials'] * 100
-            self.stat['hold_time'] *= \
-                (1000 / self.header['fs']) / self.stat['num_success']
-            self.stat['time_to_target'] *= (1 / self.header['fs']) /\
-                self.stat['num_success']
-            self.stat['failed_time'] *= (1 / self.header['fs']) /\
-                (self.stat['num_trials'] - self.stat['num_success'])
+            if self.stat['num_success'] != 0:
+                self.stat['hold_time'] *= \
+                    (1000 / self.header['fs']) / self.stat['num_success']
+                self.stat['time_to_target'] *= (1 / self.header['fs']) /\
+                    self.stat['num_success']
+            else:
+                self.stat['hold_time'] = float('NaN')
+                self.stat['time_to_target'] = float('NaN')
+            if self.stat['num_trials'] - self.stat['num_success'] != 0:
+                self.stat['failed_time'] *= (1 / self.header['fs']) /\
+                    (self.stat['num_trials'] - self.stat['num_success'])
+            else:
+                self.stat['failed_time'] = float('NaN')
         else:
             # Unsupported pardigm.
             print('\nBMIReader::WARNING: Unsupported paradigm ' +
@@ -351,16 +362,8 @@ class BMIReader():
 
     def _default_reading(self, f, columns):
         f.seek(0, 0)
-
         # Reading file header in default way.
-        self.header['subject'] = npc_remove(f.read(32), npc=b'\x00')
-        self.header['experimenter'] = npc_remove(f.read(32), npc=b'\x00')
-        self.header['paradigm'] = npc_remove(f.read(32), npc=b'\x00')
-        self.header['comment'] = npc_remove(f.read(256), npc=b'\x00')
-        self.header['fs'] = int.from_bytes(f.read(1), byteorder='big')
-        self.header['spk_dim'] = int.from_bytes(f.read(1), byteorder='big')
-        self.header['kin_dim'] = int.from_bytes(f.read(1), byteorder='big')
-        self.header['lbl_dim'] = int.from_bytes(f.read(1), byteorder='big')
+        self._header(f, 'Unknown')
 
         # Check the validation of sampling rate of BMI.
         if self.header['fs'] <= 0:
@@ -379,6 +382,35 @@ class BMIReader():
         data_cols = 1 + self.header['spk_dim'] + \
             self.header['kin_dim'] * 2 + self.header['lbl_dim'] \
             if columns is None else columns
+
+        data_points = data_size // (8 * data_cols)
+        assert data_points * 8 * data_cols == data_size, \
+            'Reading BMI file \'' + \
+            os.path.join(self.path, self.name) + '\' failed.' \
+            f'The data size is not divisible by data columns {data_cols}.'
+
+        # Reading the file data
+        data = array.array('d', f.read(data_size))
+        data = np.reshape(data, (data_points, data_cols))
+        return data, data_points
+
+    def _v1dot2_reading(self, f):
+        # Reading from file start.
+        f.seek(0, 0)
+        self._header(f, 'v1.2')
+        # Check the validation of sampling rate of BMI.
+        if self.header['fs'] <= 0:
+            print(
+                f"BMIReader::WARNING: file sampling rate: {self.header['fs']}."
+                " This seems uncorrect, set it to default value: 100."
+            )
+            self.header['fs'] = 100
+
+        # Compute the data size, which equal to file_size - header_size
+        data_size = self.file_size - f.tell()
+        # The data columns specified how many data displayed in each row.
+        data_cols = 1 + self.header['lbl_dim'] + self.header['spk_dim'] + \
+            self.header['kin_dim'] * 4 + 1 + 1
 
         data_points = data_size // (8 * data_cols)
         assert data_points * 8 * data_cols == data_size, \
@@ -417,7 +449,7 @@ class BMIReader():
         t = self.id_timestamp[version]
 
         binned_data = []
-        step_size_bmi = bin_size * self.header['fs']
+        step_size_bmi = np.round(bin_size * self.header['fs'])
         step_size_tsp = bin_size * fs_timestamp
         last_bin_idx = 0
         for i, row in enumerate(self.rawdata):
@@ -503,6 +535,32 @@ class BMIReader():
         print(f"Hold Time\t\t\t= {self.stat['hold_time']:.0f}ms")
         print(f"Ran over failed time\t\t= {self.stat['failed_time']:.2f}s")
         print(f"Time to Target\t\t\t= {self.stat['time_to_target']:.2f}s")
+
+    def _header(self, f, version):
+        if version in self.version_list:
+            self.header['version'] = npc_remove(f.read(32), npc=b'\x00')
+            assert version == self.header['version'], \
+                "Specified version mismatch readed version!"
+
+        self.header['subject'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['experimenter'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['paradigm'] = npc_remove(f.read(32), npc=b'\x00')
+        if version in self.version_list:
+            self.header['date'] = npc_remove(f.read(32), npc=b'\x00')
+
+        self.header['comment'] = npc_remove(f.read(256), npc=b'\x00')
+
+        if version in self.version_list:
+            self.header['countfirst'] = npc_remove(f.read(32), npc=b'\x00')
+            self.header['lbl_dim'] = int.from_bytes(f.read(4), 'little')
+            self.header['spk_dim'] = int.from_bytes(f.read(4), 'little')
+            self.header['kin_dim'] = int.from_bytes(f.read(4), 'little')
+            self.header['fs'] = int.from_bytes(f.read(4), 'little')
+        else:
+            self.header['fs'] = int.from_bytes(f.read(1), 'little')
+            self.header['spk_dim'] = int.from_bytes(f.read(1), 'little')
+            self.header['kin_dim'] = int.from_bytes(f.read(1), 'little')
+            self.header['lbl_dim'] = int.from_bytes(f.read(1), 'little')
 
     def reset_stat(self):
         """
