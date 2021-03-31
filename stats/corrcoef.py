@@ -3,7 +3,7 @@ import numpy as np
 import math
 
 from pybmi.utils.utils import check_params
-from pybmi.specialFunc.ibeta import ibeta
+from pybmi.special import ibeta
 from .cov import cov
 
 
