@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -44,29 +45,29 @@ class PCA():
 
     Attributes
     ----------
-    coeff : array_like, shape [num_components, P]
+    coeff : tensor, shape [num_components, P]
         The principal component coefficients for the N by P data matrix X.
         Each row of COEFF contains coefficients for one principal
         component. The rows are in descending order in terms of component
         variance (LATENT).
-    latent : array_like, shape [P,]
+    latent : tensor, shape [P,]
         The principal component variances, i.e., the eigenvalues of the
         covariance matrix of X, in LATENT.
-    explained : array_like, shape [P,]
+    explained : tensor, shape [P,]
         A vector containing the percentage of the total variance explained
         by each principal component.
-    mu : array_like, shape [P,]
+    mu : tensor, shape [P,]
         The estimated mean of X in each observation, when 'centered' is set to
         true; and all zeros when set to false.
-    sigma : array_like, shape [P,]
+    sigma : tensor, shape [P,]
         When 'variable_weights' is set to 'variance', it is the estimated
         standard deviation of X in each observation; otherwise, it is
         equal to 1 / sqrt(variable_weights).
 
     Examples
     --------
-    >>> X = np.random.rand(5000, 96)
-    >>> Y = np.random.rand(1000, 96)
+    >>> X = torch.randn(5000, 96)
+    >>> Y = torch.randn(1000, 96)
     >>> pca = PCA(rows='complete', method='svd', centered=True)
     >>> pca.fit(X, n_components=10, variable_weights='variance')
     >>> pca.print()
@@ -82,7 +83,7 @@ class PCA():
             print('WARNING: No pair-wise SVD, switch the \'method\' to EIG')
             self.method = 'eig'
 
-        self.centered = centered
+        self.centered = torch.tensor(centered, dtype=int)
 
     def fit(self, X, n_components=None, weights=None, variable_weights=None):
         """
@@ -90,16 +91,16 @@ class PCA():
 
         Parameters
         ----------
-        X : array_like
+        X : tensor or ndarray
             The input 2D matrix with the shape N by P.
         n_components : int, optional
             The number of components desired, specified as a scalar integer K
             satisfying 0 < K <= P. When specified, PCA saves the first K
             rows of COEFF, otherwise, PCA saves all P rows of COEFF.
-        weights : array_like, optional
+        weights : tensor or ndarray, optional
             Observation weights, a vector of length N containing all
             positive elements.
-        variable_weights : array_like or str, optional
+        variable_weights : tensor or ndarray or str, optional
             Weights of each feature. Two choices are possible for
             variable_weights, one is a vector of length P containing
             all positive elements; another is the string 'variance',
@@ -109,6 +110,13 @@ class PCA():
             case, PCA returns the principal components based on the
             correlation matrix.
         """
+        # Convert numpy ndarray to torch tensor
+        if type(X) is np.ndarray:
+            X = torch.from_numpy(X)
+        if type(weights) is np.ndarray:
+            weights = torch.from_numpy(weights)
+        if type(variable_weights) is np.ndarray:
+            variable_weights = torch.from_numpy(variable_weights)
 
         N, P = X.shape
         # Make sure the number of components desired are resonable.
@@ -122,40 +130,42 @@ class PCA():
         # Validate weights and variable weights.
         if weights is None:
             # Set the weights to 1 when it is None.
-            weights = np.ones((N, 1), dtype=X.dtype)
+            weights = torch.ones((N, 1), dtype=X.dtype, device=X.device)
         else:
-            assert weights.size == N, \
-                f'Wrong observation weights size: {weights.size},' \
+            assert weights.numel() == N, \
+                f'Wrong observation weights size: {weights.numel()},' \
                 f'correct size should be {N}'
             # Make sure it is a column vector.
-            weights = np.reshape(weights, (N, 1))
+            weights = torch.reshape(weights, (N, 1))
 
         if variable_weights is None:
             # Set the variable weights to 1 when it is None.
-            variable_weights = np.ones((1, P), dtype=X.dtype)
+            variable_weights = torch.ones(
+                (1, P), dtype=X.dtype, device=X.device
+            )
         elif isinstance(variable_weights, str):
             check_params(variable_weights, ['variance'], 'variable_weights')
             variable_weights = 1 / wnanvar(X, weights, bias=True, axis=0)
         else:
-            assert variable_weights.size == P, \
-                f'Wrong variable weights size: {variable_weights.size},' \
+            assert variable_weights.numel() == P, \
+                f'Wrong variable weights size: {variable_weights.numel()},' \
                 f'correct size should be {P}'
         # Make sure it is a row vector.
-        variable_weights = np.reshape(variable_weights, (1, P))
+        variable_weights = torch.reshape(variable_weights, (1, P))
         # Sigma, represents the std of X if 'variable_weights'=='variance',
         # otherwise, it's the reciprocal root of user-specified
         # variable_weights.
-        self.sigma = 1 / np.sqrt(variable_weights)
+        self.sigma = 1 / torch.sqrt(variable_weights)
 
-        assert np.any(weights > 0) and np.any(variable_weights > 0), \
+        assert torch.any(weights > 0) and torch.any(variable_weights > 0), \
             'Found none positive weights! Please check the weights vectors.'
 
         # Check the nan values in X
-        nan_idx = np.isnan(X)
-        was_nan = np.any(nan_idx, axis=1)   # Rows that contain NaN
+        nan_idx = torch.isnan(X)
+        was_nan = torch.any(nan_idx, dim=1)   # Rows that contain NaN
 
         # If all X values are NaNs
-        if np.all(nan_idx):
+        if torch.all(nan_idx):
             self.coeff = float('NaN')
             self.latent = float('NaN')
             self.explained = float('NaN')
@@ -172,45 +182,47 @@ class PCA():
         if self.rows == 'complete':
             # Degrees of freedom (DOF) is M - 1 if centered and M if not
             # centered, where M is the numer of rows without any NaN element.
-            D = max(0, N - self.centered - np.sum(was_nan))
+            D = max(0, N - self.centered - torch.sum(was_nan))
         else:
             # DOF is the maximum number of element pairs without NaNs.
-            not_nan = (~nan_idx).astype(np.float)
-            nan_cov = np.dot(not_nan.T, not_nan) * ~np.eye(P, dtype=np.bool)
-            D = np.max(nan_cov) - self.centered
+            not_nan = (~nan_idx).type(torch.float)
+            nan_cov = torch.matmul(not_nan.T, not_nan) * \
+                ~torch.eye(P, dtype=torch.bool, device=not_nan.device)
+            D = torch.max(nan_cov) - self.centered
 
         # Calculate each features mean value across all samples.
         self.mu = wnanmean(X, W=weights, axis=0) \
-            if self.centered else np.zeros(P)
+            if self.centered else torch.zeros(P, device=X.device)
         # Center the data
         _X = X - self.mu
 
         if self.method == 'eig':
             # Apply observation and variable weights
-            _X *= np.sqrt(weights) / self.sigma
+            _X *= torch.sqrt(weights) / self.sigma
             # Remove NaNs missing data and apply EIG.
             C = self._nancov(_X, D)
-            self.latent, self.coeff = np.linalg.eig(C)
+            self.latent, self.coeff = torch.eig(C, eigenvectors=True)
+            self.latent = self.latent[:, 0]     # Only need the real part.
             # Make the COEFF same order as the method='svd'.
             self.coeff = self.coeff.T
 
             # Sort the eigen values in descend order.
-            idx = self.latent.argsort()[::-1]
+            idx = self.latent.argsort(descending=True)
             self.coeff = self.coeff[idx] * self.sigma
             self.latent = self.latent[idx]
 
             # Check if eigvalues are all postive
-            assert np.any(self.latent > 0), \
+            assert torch.any(self.latent > 0), \
                 'Covariance of X is not positive semi-definite.'
         else:
             # Remove NaNs missing data
             _X = _X[~was_nan]
             # Apply observation and variable weights
             weights = weights[~was_nan]
-            omega_sqrt = np.sqrt(weights)
+            omega_sqrt = torch.sqrt(weights)
             _X *= omega_sqrt / self.sigma
             # Apply SVD. NOTE: this coeff is coeff.T in MATLAB.
-            U, S, self.coeff = np.linalg.svd(_X, full_matrices=False)
+            U, S, self.coeff = torch.linalg.svd(_X, full_matrices=False)
             U /= omega_sqrt
             self.coeff *= self.sigma
             self.latent = S ** 2 / D
@@ -228,10 +240,11 @@ class PCA():
 
         # Enforce a sign convention on the coefficients -- the largest element
         # in each row will have a positive sign.
-        max_idx = np.argmax(abs(self.coeff), axis=1)
+        max_idx = torch.argmax(abs(self.coeff), dim=1)
         d1, d2 = self.coeff.shape
-        index = max_idx + np.linspace(0, (d1 - 1) * d2, d1, dtype=int)
-        rowsign = np.sign(self.coeff.flatten()[index])[:, np.newaxis]
+        index = max_idx + torch.linspace(0, (d1 - 1) * d2, d1, dtype=int,
+                                         device=X.device)
+        rowsign = torch.sign(self.coeff.flatten()[index]).unsqueeze(1)
         self.coeff *= rowsign
         return self
 
@@ -247,22 +260,26 @@ class PCA():
 
         Parameters
         ----------
-        X : array_like
+        X : tensor or array_like
             The input matrix with the shape [N, P].
 
         Returns
         -------
-        score : array_like
+        score : tensor
             The principal component score of X in the principal component
             space. Rows of SCORE correspond to observations, columns to
             components. The centered data can be reconstructed by SCORE*COEFF.
         """
+        # Convert numpy ndarray to torch tensor
+        if type(X) is np.ndarray:
+            X = torch.from_numpy(X)
         # Center the data
         _X = X - self.mu if hasattr(self, 'mu') else X
         # Standarlize the data if necessary
         _X /= self.sigma ** 2 if hasattr(self, 'sigma') else _X
         # The mapped data in new space.
-        score = np.dot(_X, self.coeff.T) if hasattr(self, 'coeff') else _X
+        score = torch.matmul(_X, self.coeff.T) \
+            if hasattr(self, 'coeff') else _X
         return score
 
     def inverse_apply(self, score):
@@ -272,18 +289,23 @@ class PCA():
 
         Parameters
         ----------
-        score : array_like
+        score : tensor or array_like
             The principal component score of X in the principal component
             space. Rows of SCORE correspond to observations, columns to
             components.
 
         Returns
         -------
-        X : array_like
+        X : tensor
             The original data before apply PCA. Rows of X correspond to
             observations, columns to features in original space.
         """
-        X = np.dot(score, self.coeff) if hasattr(self, 'coeff') else score
+        # Convert numpy ndarray to torch tensor
+        if type(score) is np.ndarray:
+            score = torch.from_numpy(score)
+
+        X = torch.matmul(score, self.coeff) \
+            if hasattr(self, 'coeff') else score
         X += self.mu if hasattr(self, 'mu') else 0
         return X
 
@@ -294,10 +316,13 @@ class PCA():
         by PCs' and 'Cumulative percentage of Variance explained by PCs'.
         """
         if hasattr(self, 'latent'):
-            explained_cumsum = np.cumsum(self.explained)
+            explained_cumsum = np.cumsum(self.explained.cpu().numpy())
             num_pc = list(range(1, self.latent.shape[0] + 1))
             data = np.array(
-                [num_pc, self.latent, self.explained, explained_cumsum]
+                [num_pc,
+                 self.latent.cpu().numpy(),
+                 self.explained.cpu().numpy(),
+                 explained_cumsum]
             )
             pca_info = pd.DataFrame(
                 data.T,
@@ -346,26 +371,26 @@ class PCA():
 
         Parameters
         ----------
-        X : array_like
+        X : tensor
             The input matrix that will compute covariance.
         D : int
             Degree of fredom of the samples.
 
         Returns
         -------
-        C : array_like
+        C : tensor
             The covariance of X, which removed the NaNs from the X,
             if rows='complete'; otherwise, compute paried wise covariance
             in columns i and j, which both columns are not contain NaNs.
         """
         N, P = X.shape
-        nan_idx = np.isnan(X)
+        nan_idx = torch.isnan(X)
 
         if self.rows == 'complete':
-            _X = X[~np.any(nan_idx, axis=1)]
-            C = np.dot(_X.T, _X) / D
+            _X = X[~torch.any(nan_idx, dim=1)]
+            C = torch.matmul(_X.T, _X) / D
         elif self.rows == 'pairwise':
-            C = np.zeros((P, P), dtype=X.dtype)
+            C = torch.zeros((P, P), dtype=X.dtype, device=X.device)
             # Compute the pair-wise covariance of X. Note that we only compute
             # the lower triangular of covariance under the for loop to reduce
             # the computating cost. The upper triangular can get easily by
@@ -373,11 +398,12 @@ class PCA():
             for i in range(P):
                 for j in range(i + 1):
                     # Find i and j columns, both have no NaNs rows.
-                    non_nan_rows = ~np.any(nan_idx[:, [i, j]], axis=1)
+                    non_nan_rows = ~torch.any(nan_idx[:, [i, j]], dim=1)
                     # The DOF of the two columns.
-                    denom = max(0, np.sum(non_nan_rows) - self.centered)
+                    denom = max(0, torch.sum(non_nan_rows) - self.centered)
                     # Covariance of i and j column
-                    C[i, j] = np.dot(X[non_nan_rows, i].T, X[non_nan_rows, j])
+                    C[i, j] = torch.matmul(X[non_nan_rows, i].T,
+                                           X[non_nan_rows, j])
                     C[i, j] /= denom
-            C += np.tril(C, -1).T
+            C += torch.tril(C, -1).T
         return C
