@@ -1,24 +1,35 @@
 import numpy as np
-import math
 
-from .integ2d import integ2d
-from scipy.signal import hilbert
+from joblib import Parallel, delayed
+from .computetfr import compute_tfr
 
 
-def tfrscalo(X, T, wave, fmin, fmax, N, trace=0):
+def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
+             wave, fmin, fmax, N, n_context=0, trace=0):
     """
     TFRSCALO Scalogram, for Morlet or Mexican hat wavelet.
     This function computes the scalogram (squared magnitude
-    of a continuous wavelet transform).
+    of a continuous wavelet transform) for given time duration.
 
     Parameters
     ----------
-    X : ndarray, shape (Nx, 1)
-        signal (in time) to be analyzed. Its analytic version is
-        used (z=hilbert(real(X))). Note that this function can't
-        accept complex type value.
-    T : ndarray, shape (Nt, 1)
-        Time instant(s) on which the TFR is evaluated (default: 1:Nx).
+    X : ndarray, shape (length, nch)
+        signal (in time) to be analyzed. X should be a 2D matrix that
+        rows represent the time points and columns represents the number
+        of channels.
+    record_time : ndarray, shape (length,)
+        The recording time for each X point.
+    desire_time : ndarray, shape (N,)
+        Specified which time points used as reference to get the window.
+    fs : float
+        The sampling frequency of the signal.
+    window_size : float
+        The window size for the tfr computation. Only history used as
+        the window sequence. Unit: second.
+    edge_size : float
+        The time length used to reduce the edge effects in the scalogram
+        calculation. The data length used to compute scalogram equals to
+        [window_size + 2 * edge_size]. Unit: second.
     wave : int
         Half length of the Morlet analyzing wavelet at coarsest
         scale. If WAVE = 0, the Mexican hat is used. WAVE can also be
@@ -28,9 +39,12 @@ def tfrscalo(X, T, wave, fmin, fmax, N, trace=0):
         Respectively lower and upper frequency bounds of
         the analyzed signal. These parameters fix the equivalent
         frequency bandwidth (expressed in Hz).
-        FMIN and FMAX must be >0 and <=0.5.
+        FMIN and FMAX must be > 0 and <= fs / 2.
     N : int
         Number of analyzed voices.
+    n_context : int, optional
+        The number of context for the current time step. Note that only
+        history are considered to be the context. Default: 0.
     trace : int, optional
         If nonzero, the progression of the algorithm is shown
         Default: 0.
@@ -43,75 +57,55 @@ def tfrscalo(X, T, wave, fmin, fmax, N, trace=0):
         and ordinates correspond to a geometrically sampled
         frequency). First row of TFR corresponds to the lowest
         frequency.
-    F : ndarray
-        Vector of normalized frequencies (geometrically sampled
-        from FMIN to FMAX).
-    WT : ndarray
-        Complex matrix containing the corresponding wavelet
-        transform. The scalogram TFR is the square modulus of WT.
 
     Examples
     --------
     >>> x=np.random.randn(100, 10)
-    >>> trf, f, wt = tfrscalo(x)
+    >>> tfr, f = tfrscalo(x, 1.1, 1000, 7, 10, 120, 10)
     """
-    # Do error checking first.
     if len(X.shape) == 1:
+        # Make sure X is a 2D matrix.
         X = np.reshape(X, (len(X), 1))
-    if len(T.shape) == 1:
-        T = np.reshape(T, (1, len(T)))
     assert len(X.shape) == 2, "X must have only two dimension."
-    assert len(T.shape) == 2, "T must have only two dimension."
+    assert len(record_time.shape) == 1, "'record_time' should be a 1D vector."
+    assert len(desire_time.shape) == 1, "'desire_time' should be a 1D vector."
 
+    # Compute the number of points for the window and edge.
+    n = int(window_size * fs)   # Number of points for the window
+    e = int(edge_size * fs)     # Number of points for the edge
+    npts = n + 2 * e + 1        # Number of points used for the tfr compute.
+    # Time instant(s) on which the TFR is evaluated
+    T = np.linspace(0, npts - 1, npts, dtype=int)
+    # Make sure the step of context is integer.
+    if n_context > 0:
+        assert n % n_context == 0, "Invalid number of context."
+        step = n // n_context
+    else:
+        step = n + 1
+
+    # Shape of X: xrow is the total length, xcol is the number of channel.
     xrow, xcol = X.shape
-    trow, tcol = T.shape
-    assert 0 < xcol <= 2, "X must have one or two columns."
-    assert trow == 1, "T must only have one row."
-    assert wave >= 0, "WAVE must be positive."
 
-    # Hilbert transform the X signal.
-    s = (X - X.mean(axis=0)).T
-    z = hilbert(s)
-    if trace:
-        print('Scalogram distribution.')
+    def _parallel_compute(t):
+        # Initialize tfr.
+        tfr = np.zeros([xcol, N, n_context + 1])
+        # Find the position of t in record_time.
+        i = np.argmin(np.abs(record_time - t))
+        if i - (n + e) < 0:
+            # Current index smaller than window_size + edge_size,
+            # the history signal is not recorded. Skip it!
+            return tfr
+        if i + e > xrow:
+            # Current index did not have enough future
+            # points for the window_size + edge_size. Breaking loop!
+            return tfr
+        window = X[i - (n + e):i + e + 1]
+        for ch, x in enumerate(window.T):
+            r = compute_tfr(x, T, wave, fmin / fs, fmax / fs, N, trace)[0]
+            # Remove the edge part, and Compute the context
+            tfr[ch, :, :] = np.fliplr(np.fliplr(r)[:, e:-e:step])
+        return tfr
 
-    # Check if fmin and fmax are validate.
-    assert fmin < fmax, "FMAX must be greater than FMIN."
-    assert fmin > 0 and fmin <= 0.5, "FMIN must be > 0 and <= 0.5."
-    assert fmax > 0 and fmax <= 0.5, "FMAX must be > 0 and <= 0.5."
-    if trace:
-        print(f"Frequency runs from {fmin} to {fmax} with {N} points.")
-
-    f = np.reshape(np.logspace(np.log10(fmin), np.log10(fmax), N), (10, 1))
-    a = np.logspace(np.log10(fmax / fmin), np.log10(1), N)
-
-    wt = np.zeros((N, tcol), dtype=np.complex)
-    tfr = np.zeros((N, tcol))
-
-    if wave > 0:
-        if trace:
-            print("Using a Morlet wavelet...")
-        for ptr in range(N):
-            nha = wave * a[ptr]
-            nha_round = int(nha + 0.5)
-            tha = np.linspace(-nha_round, nha_round, 2 * nha_round + 1,
-                              dtype=np.int)
-            ha = np.exp(-(2 * np.log(10) / nha ** 2) * tha ** 2) *\
-                np.exp(np.complex(0, 1) * 2 * math.pi * f[ptr] * tha)
-            detail = np.convolve(z.flatten(), ha) / np.sqrt(a[ptr])
-            detail = detail[nha_round:len(detail) - nha_round]  # careful
-            wt[ptr] = detail[T]
-            # tfr[ptr] = detail[T] * np.conj(detail[T])
-            tfr[ptr] = abs(detail[T]) ** 2
-    elif wave == 0:
-        print('Not implement yet.')
-    elif len(wave) > 1:
-        print('Not implement yet.')
-
-    # Normalization
-    SP = np.fft.fft(z)
-    indmin = int(fmin * (xrow - 2) + 0.5)
-    indmax = int(fmax * (xrow - 2) + 0.5)
-    SPana = SP[:, indmin:indmax + 1]
-    tfr = tfr * np.linalg.norm(SPana) ** 2 / integ2d(tfr, T, f) / N
-    return tfr, f, wt
+    r = Parallel(n_jobs=12)(delayed(_parallel_compute)(t) for t in desire_time)
+    # Shape of the output (time, channels, frequencies, context)
+    return np.stack(r)

@@ -41,23 +41,28 @@ def compute_psd(Sxx, w, fft_range, nfft, fs=None, esttype='psd'):
             end_pt = (nfft + 1) // 2        # ODD
             Sxx_unscaled = Sxx[:, :end_pt]  # Take only [0, pi] or [0, pi)
             # Only DC is a unique point and doesn't get doubled
-            Sxx = np.concatenate((Sxx_unscaled[:, :1], 2 * Sxx_unscaled[:, 1:]), axis=-1)
+            Sxx = np.concatenate(
+                (Sxx_unscaled[:, :1], 2 * Sxx_unscaled[:, 1:]), axis=-1
+            )
         else:
             end_pt = (nfft // 2) + 1        # EVEN
             Sxx_unscaled = Sxx[:, :end_pt]  # Take only [0, pi] or [0, pi)
             # Don't double unique Nyquist point
             Sxx = np.concatenate(
-                (Sxx_unscaled[:, :1], 2 * Sxx_unscaled[:, 1:-1], Sxx_unscaled[:, -1:]),
+                (Sxx_unscaled[:, :1], 2 * Sxx_unscaled[:, 1:-1],
+                 Sxx_unscaled[:, -1:]),
                 axis=-1
             )
         w = w[:end_pt]
 
     # Compute the PSD [Power/freq]
     if fs is not None:
-        Pxx = Sxx / fs              # Scale by the sampling frequency to obtain the psd
+        # Scale by the sampling frequency to obtain the psd
+        Pxx = Sxx / fs
         units = 'Hz'
     else:
-        Pxx = Sxx / (2 * math.pi)   # Scale the power spectrum by 2*pi to obtain the psd
+        # Scale the power spectrum by 2*pi to obtain the psd
+        Pxx = Sxx / (2 * math.pi)
         units = 'rad/sample'
 
     if esttype == 'psd':
