@@ -5,7 +5,7 @@ from .computetfr import compute_tfr
 
 
 def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
-             wave, fmin, fmax, N, n_context=0, trace=0):
+             wave, fmin, fmax, N, n_context=0, njobs=1, trace=0):
     """
     TFRSCALO Scalogram, for Morlet or Mexican hat wavelet.
     This function computes the scalogram (squared magnitude
@@ -86,7 +86,7 @@ def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
     # Shape of X: xrow is the total length, xcol is the number of channel.
     xrow, xcol = X.shape
 
-    def _parallel_compute(t):
+    def _parcompute(t):
         # Initialize tfr.
         tfr = np.zeros([xcol, N, n_context + 1])
         # Find the position of t in record_time.
@@ -106,6 +106,6 @@ def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
             tfr[ch, :, :] = np.fliplr(np.fliplr(r)[:, e:-e:step])
         return tfr
 
-    r = Parallel(n_jobs=12)(delayed(_parallel_compute)(t) for t in desire_time)
+    r = Parallel(n_jobs=njobs)(delayed(_parcompute)(t) for t in desire_time)
     # Shape of the output (time, channels, frequencies, context)
     return np.stack(r)
