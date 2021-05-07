@@ -52,23 +52,24 @@ def align(x, y, timestamp_x=None, timestamp_y=None, inc=3000):
     assert len(timestamp_y) == T2, \
         f'Shape error occured! The length of timestamp y should be {T2}.'
 
-    ix = np.round(timestamp_x[0] / inc).astype(np.int)
-    iy = np.round(timestamp_y[0] / inc).astype(np.int)
+    # First, find the shared part of both timestamp x and timestamp y,
+    # calculate the start index and end index of shared part in timestamp y.
+    start = max(timestamp_x[0], timestamp_y[0])
+    start_index_y = np.argmin(np.abs(timestamp_y - start))
+    end = min(timestamp_x[-1], timestamp_y[-1])
+    end_index_y = np.argmin(np.abs(timestamp_y - end)) + 1
 
-    start = max(ix, iy)
-    # Make sure the count is under the bounds of both x and y.
-    count = min(min(min(T1, T2), T1 - (start - ix)), T2 - (start - iy))
-    # Check if both ends of timestamp of x and y are equal.
-    ts_x = (timestamp_x[start - ix], timestamp_x[start - ix + count - 1])
-    ts_y = (timestamp_y[start - iy], timestamp_y[start - iy + count - 1])
-    if abs(ts_x[0] - ts_y[0]) >= inc:
-        print('\nWARNING: The difference of start timestamp of x and y '
-              f'are greater than step size: abs({ts_x[0]}-{ts_y[0]})>={inc}')
-    if abs(ts_x[1] - ts_y[1]) >= inc:
-        print('\nWARNING: The difference of end timestamp of x and y '
-              f'are greater than step size: abs({ts_x[1]}-{ts_y[1]})>={inc}')
+    # Use the start and end index of y data to find aligned x data.
+    index_x = []
+    for i in range(start_index_y, end_index_y):
+        idx = np.argmin(np.abs(timestamp_x - timestamp_y[i]))
+        if np.abs(timestamp_x[idx] - timestamp_y[i]) >= inc:
+            print('\nWARNING: The difference of timestamp of x and y at'
+                  f'index {i} are greater than step size: '
+                  f'abs({timestamp_x[idx]}-{timestamp_y[i]})>={inc}')
+        index_x.append(idx)
 
     # Cut the data x and y
-    x = x[start - ix:start - ix + count]
-    y = y[start - iy:start - iy + count]
+    x = x[index_x]
+    y = y[start_index_y:end_index_y]
     return x, y
