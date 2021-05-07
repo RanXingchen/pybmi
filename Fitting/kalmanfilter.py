@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import pickle
 
 
 class KalmanFilter():
@@ -179,3 +180,37 @@ class KalmanFilter():
         if isnumpy:
             X = X.numpy()
         return X
+
+    def save(self, path):
+        """
+        Save the Kalman filter parameters to the specified path.
+        The saving parameters including: A, H, P, Q, W
+
+        Parameters
+        ----------
+        path : str
+            The path of the parameters will be saved.
+        """
+        with open(path, 'wb') as f:
+            pickle.dump(self.A, f)
+            pickle.dump(self.H, f)
+            pickle.dump(self.P, f)
+            pickle.dump(self.Q, f)
+            pickle.dump(self.W, f)
+
+    def load(self, path):
+        """
+        Load the Kalman filter parameters to the specified path.
+        The loading parameters including: A, H, P, Q, W
+
+        Parameters
+        ----------
+        path : str
+            The path of the parameters will be loaded.
+        """
+        with open(path, 'rb') as f:
+            self.A = pickle.load(f)
+            self.H = pickle.load(f)
+            self.P = pickle.load(f)
+            self.Q = pickle.load(f)
+            self.W = pickle.load(f)
