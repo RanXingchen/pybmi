@@ -237,4 +237,7 @@ class LFPReader():
                 self.nbands, self.ncontext, self.njobs
             )
             timestamp = desire_time
+            # Remove zeros rows from LFP and timestamp
+            zeros_idx = np.reshape(lfp, (lfp.shape[0], -1)).mean(axis=-1) == 0
+            lfp, timestamp = lfp[~zeros_idx], timestamp[~zeros_idx]
         return lfp, timestamp
