@@ -69,20 +69,20 @@ class EarlyStopping:
             self._save_checkpoint(val_loss, models, save_path, modelnames)
             self.counter = 0
 
-    def _save_checkpoint(self, val_loss, model, save_path, modelname):
+    def _save_checkpoint(self, val_loss, model, save_path, names):
         """
         Save model when validation loss decrease.
         """
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.4f} '
                   f'--> {val_loss:.4f}). Saving model ...')
-        # Check the type of model and modelname
-        if type(model) in [list, tuple] and type(modelname) in [list, tuple]:
-            assert len(model) == len(modelname), \
-                'The length of model and modelname not equal: ' \
-                f'{len(model)} and {len(modelname)}'
-            for m, name in zip(model, modelname):
-                torch.save(m.state_dict(), os.path.join(save_path, name))
-        else:
-            torch.save(model.state_dict(), os.path.join(save_path, modelname))
+        if save_path is not None and names is not None:
+            # Check the type of model and names
+            if type(model) in [list, tuple] and type(names) in [list, tuple]:
+                m, n = len(model), len(names)
+                assert m == n, f'Error of number of model and names: {m}!={n}.'
+                for m, n in zip(model, names):
+                    torch.save(m.state_dict(), os.path.join(save_path, n))
+            else:
+                torch.save(model.state_dict(), os.path.join(save_path, names))
         self.val_loss_min = val_loss
