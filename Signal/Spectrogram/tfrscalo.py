@@ -95,7 +95,7 @@ def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
             # Current index smaller than window_size + edge_size,
             # the history signal is not recorded. Skip it!
             return tfr
-        if i + e > xrow:
+        if i + e + 1 > xrow:
             # Current index did not have enough future
             # points for the window_size + edge_size. Breaking loop!
             return tfr
