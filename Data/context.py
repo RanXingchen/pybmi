@@ -18,7 +18,7 @@ class Context():
         self.n = n
         self.bidirectional = bidirectional
 
-    def apply(self, x, y):
+    def apply(self, x, y=None):
         """
         Apply input and target data to compute the context.
 
@@ -27,7 +27,7 @@ class Context():
         x : ndarray
             Input data which will add context. Shape: (T, N), where T is
             the length of the input and N is the features.
-        y : ndarray
+        y : ndarray, optional
             The corresponding target data of x. Shape: (T, M), where T is
             the length of the target which should be equal to length of x,
             and M is the features of y.
@@ -40,7 +40,8 @@ class Context():
                        for i in range(n_left, n_right)]
             shifted.append(x[n_right - n_left:])
             x = torch.cat(shifted, dim=-1)
-            y = y[self.n:self.n + x.shape[0] + 1]
+            if y is not None:
+                y = y[self.n:self.n + x.shape[0] + 1]
         return x, y
 
     def inverse_apply(self, y):
@@ -55,7 +56,8 @@ class Context():
         if self.n != 0:
             # Use the first and end element to fill the lost sequences.
             fill_beg = y[:1]
-            fill_end = y[-1:] if self.bidirectional else []
+            fill_end = y[-1:] if self.bidirectional \
+                else torch.tensor([], device=y.device)
             for i in range(self.n):
                 y = torch.cat((fill_beg, y, fill_end), dim=0)
         return y

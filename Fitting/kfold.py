@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 
-def kfold(trainx, trainy, testx, testy, nfold, func, *arg):
+def kfold(trainx, trainy, nfold, func, *arg):
     """
     Running specified function using k-fold cross validation.
 
@@ -17,12 +17,6 @@ def kfold(trainx, trainy, testx, testy, nfold, func, *arg):
         be split to training set and validation set, where the index
         have same order as the inp. If NFOLD is 0 or 1, the
         validation set will be None.
-    testx : ndarray or tensor
-        The input test data. Used to test the performance of the
-        model after training and validation.
-    testy : ndarray or tensor
-        The target test data. Used to test the performance of the
-        model after training and validation.
     nfold : int
         The number of fold used to do cross validation. If nfold is
         0 or 1, no cross validation was used.
@@ -38,18 +32,15 @@ def kfold(trainx, trainy, testx, testy, nfold, func, *arg):
 
     Returns
     -------
-    epochs : ndarray
-        The number of training epochs of the k-fold cross validation.
     losses : ndarray
         The losses of the k-fold cross validation. What type of loss
         are determined by the FUNCS.
     """
-    epochs, losses = [], []
+    losses = []
 
     if nfold == 0 or nfold == 1:
         # Number of fold is 0, the validation data is None.
-        epoch, _, loss = func(trainx, trainy, None, None, testx, testy, *arg)
-        epochs.append(epoch)
+        _, loss = func(trainx, trainy, None, None, *arg)
         losses.append(loss.item())
     else:
         # The number of validation data points in each fold
@@ -62,10 +53,9 @@ def kfold(trainx, trainy, testx, testy, nfold, func, *arg):
             tinp, einp = trainx[~idx_eval], trainx[idx_eval]
             ttrg, etrg = trainy[~idx_eval], trainy[idx_eval]
             # Decoding the data of current fold.
-            epoch, _, loss = func(tinp, ttrg, einp, etrg, testx, testy, *arg)
-            # Store the criterion and epoches.
-            epochs.append(epoch)
+            _, loss = func(tinp, ttrg, einp, etrg, *arg)
+            # Store the criterion value.
             losses.append(loss.item())
             # Empty the stored cache for CUDA
             torch.cuda.empty_cache()
-    return np.array(epochs), np.array(losses)
+    return np.array(losses)
