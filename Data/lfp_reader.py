@@ -223,10 +223,10 @@ class LFPReader():
             Pxx, f = zip(*r)
             Pxx, f = np.stack(Pxx, axis=0), f[0]
             # Write specified frequency of Pxx to lfp
-            lfp = np.zeros((nbins, C * self.nbands))
+            lfp = np.zeros((nbins, C, self.nbands))
             for i, freq in enumerate(self.bands):
                 index = (f >= freq[0]) & (f < freq[1])
-                lfp[:, i::self.nbands] = np.sum(Pxx[:, :, index], axis=-1)
+                lfp[:, :, i] = np.sum(Pxx[:, :, index], axis=-1)
             # Get the timestamp of LFP
             timestamp = timestamp[::step]
         elif self.method == 'wavelet':
