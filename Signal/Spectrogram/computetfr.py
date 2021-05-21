@@ -56,12 +56,12 @@ def compute_tfr(X, T, wave, fmin, fmax, N, trace=0):
     >>> tfr, f, wt = tfrscalo(x)
     """
     # Do error checking first.
-    if len(X.shape) == 1:
+    if X.ndim == 1:
         X = np.reshape(X, (len(X), 1))
-    if len(T.shape) == 1:
+    if T.ndim == 1:
         T = np.reshape(T, (1, len(T)))
-    assert len(X.shape) == 2, "X must have only two dimension."
-    assert len(T.shape) == 2, "T must have only two dimension."
+    assert X.ndim == 2, "X must have only two dimension."
+    assert T.ndim == 2, "T must have only two dimension."
 
     xrow, xcol = X.shape
     trow, tcol = T.shape

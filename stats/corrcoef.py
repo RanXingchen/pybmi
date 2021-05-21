@@ -70,15 +70,15 @@ def corrcoef(X, Y=None, alpha=0.05, rows='all'):
         Y = torch.from_numpy(Y)
 
     # Treat all vectors of X like column vectors.
-    if len(X.shape) == 1 or X.shape[0] == 1:
+    if X.ndim == 1 or X.shape[0] == 1:
         X = X.reshape(-1, 1)
 
     if Y is not None:
         # Treat all vectors of Y like column vectors.
-        if len(Y.shape) == 1 or Y.shape[0] == 1:
+        if Y.ndim == 1 or Y.shape[0] == 1:
             Y = Y.reshape(-1, 1)
 
-        assert len(Y.shape) == 2, \
+        assert Y.ndim == 2, \
             f"The input dimension of Y is {Y.shape}, it must be 2D."
         assert X.numel() == Y.numel(), "Number of elements of " \
             f"X and Y mismatch, X: {X.numel()}, Y: {Y.numel()}"
@@ -89,7 +89,7 @@ def corrcoef(X, Y=None, alpha=0.05, rows='all'):
         # Convert two inputs to equivalent single input.
         X = torch.cat((X.reshape(-1, 1), Y.reshape(-1, 1)), dim=-1)
 
-    assert len(X.shape) == 2, \
+    assert X.ndim == 2, \
         f"The input dimension of X is {X.shape}, it must be 2D."
 
     # Check the input parameters

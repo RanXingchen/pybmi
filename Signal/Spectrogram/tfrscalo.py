@@ -63,10 +63,10 @@ def tfrscalo(X, record_time, desire_time, fs, window_size, edge_size,
     >>> x=np.random.randn(100, 10)
     >>> tfr, f = tfrscalo(x, 1.1, 1000, 7, 10, 120, 10)
     """
-    if len(X.shape) == 1:
+    if X.ndim == 1:
         # Make sure X is a 2D matrix.
         X = np.reshape(X, (len(X), 1))
-    assert len(X.shape) == 2, "X must have only two dimension."
+    assert X.ndim == 2, "X must have only two dimension."
     assert len(record_time.shape) == 1, "'record_time' should be a 1D vector."
     assert len(desire_time.shape) == 1, "'desire_time' should be a 1D vector."
 

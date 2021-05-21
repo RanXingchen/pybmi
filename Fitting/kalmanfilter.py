@@ -138,9 +138,9 @@ class KalmanFilter():
             It have same length with Z.
         """
         # Make sure Z and X0 have 2 dimensions
-        if len(Z.shape) == 1:
+        if Z.ndim == 1:
             Z = Z[np.newaxis, :]
-        if len(x0.shape) == 1:
+        if x0.ndim == 1:
             x0 = x0[np.newaxis, :]
 
         # Convert numpy ndarray to torch tensor

@@ -5,7 +5,8 @@ import traceback
 
 def psdfreqvec(npts=1024, fs=None, centerDC=False, freq_range='whole'):
     """
-    Return a frequency vector in radians based on the number of points specified in NPTS.
+    Return a frequency vector in radians based on the number of points
+    specified in NPTS.
     The vector returned assumes 2pi periodicity.
 
     Parameters
@@ -16,8 +17,8 @@ def psdfreqvec(npts=1024, fs=None, centerDC=False, freq_range='whole'):
         By default fs is set to empty indicating normalized frequency.
 
     centerDC: specifies a boolean value in CENTERDC, \
-        which indicates if zero hertz should be in the center of the frequency vector.
-        CENTERDC can be one of these two values: False | True.
+        which indicates if zero hertz should be in the center of the frequency
+        vector. CENTERDC can be one of these two values: False | True.
 
     freq_range: specifies the range of frequency in RANGE.
         RANGE can be one of the two strings: 'whole' | 'half'.
@@ -27,11 +28,12 @@ def psdfreqvec(npts=1024, fs=None, centerDC=False, freq_range='whole'):
             'half'  = [0, pi] for even NPTS or [0, pi) for odd NPTS
         When CenterDC=true then:
             'whole' = (-pi, pi] for even NPTs or (-pi, pi) for odd NPTs
-            'half'  = [-pi/2, pi/2] for even* NPTS or (-pi/2, pi/2) for odd NPTS
-            * When NPTS is not divisible by 4, then the range is (-pi/2, pi/2).
+            'half'  = [-pi/2, pi/2] for even* NPTS or (-pi/2, pi/2) for odd
+            NPTS When NPTS is not divisible by 4, then the range is
+            (-pi/2, pi/2).
 
-        When freq_range='half' the frequency vector has length (NPTS/2+1) if NPTS is
-        even**, and (NPTS+1)/2 if NPTS is odd***.
+        When freq_range='half' the frequency vector has length (NPTS/2+1) if
+        NPTS is even**, and (NPTS+1)/2 if NPTS is odd***.
 
             ** If centerDC=True and the number of points specified is even is
             not divisible by 4, then the number of points returned is NPTS/2.
@@ -43,7 +45,8 @@ def psdfreqvec(npts=1024, fs=None, centerDC=False, freq_range='whole'):
     """
     # Compute the frequency grid.
     if fs is None:
-        # Compute the whole frequency range, e.g., [0, 2pi) to avoid round off errors.
+        # Compute the whole frequency range, e.g., [0, 2pi) to avoid round off
+        # errors.
         fs = 2 * math.pi
 
     freq_res = fs / npts
@@ -69,7 +72,8 @@ def psdfreqvec(npts=1024, fs=None, centerDC=False, freq_range='whole'):
 
     # Get the right grid based on range, centerdc, etc.
     w = _final_grid(
-        w, npts, Nyq, freq_range, centerDC, is_npts_odd, is_half_npts_odd, half_npts, quarter_npts
+        w, npts, Nyq, freq_range, centerDC, is_npts_odd, is_half_npts_odd,
+        half_npts, quarter_npts
     )
     return np.reshape(w, -1)
 
@@ -94,7 +98,8 @@ def _npts_info(npts):
 def _final_grid(w, npts, Nyq, freq_range, centerDC,
                 is_npts_odd, is_half_npts_odd, half_npts, quarter_npts):
     """
-    Calculate the correct grid based on user specified values for range, centerdc, etc.
+    Calculate the correct grid based on user specified values for range,
+    centerdc, etc.
     """
     if freq_range.lower() == 'whole':
         # Calculated by default.% [0, 2pi)

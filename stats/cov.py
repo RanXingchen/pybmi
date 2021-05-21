@@ -60,15 +60,15 @@ def cov(x, y=None, biased=False, nanflag='includenan'):
         y = torch.from_numpy(y)
 
     # Treat all vectors of x like column vectors.
-    if len(x.shape) == 1 or x.shape[0] == 1:
+    if x.ndim == 1 or x.shape[0] == 1:
         x = x.reshape(-1, 1)
 
     if y is not None:
         # Treat all vectors of y like column vectors.
-        if len(y.shape) == 1 or y.shape[0] == 1:
+        if y.ndim == 1 or y.shape[0] == 1:
             y = y.reshape(-1, 1)
 
-        assert len(y.shape) == 2, \
+        assert y.ndim == 2, \
             f"The input dimension of y is {y.shape}, it must be 2D."
         assert x.numel() == y.numel(), "Number of elements of " \
             f"x and y mismatch, x: {x.numel()}, y: {y.numel()}"
@@ -81,7 +81,7 @@ def cov(x, y=None, biased=False, nanflag='includenan'):
         x = torch.cat((x.reshape(-1, 1), y.reshape(-1, 1)), dim=-1)
 
     # Check the dimension of x, the dimension > 2D is not acceptable.
-    assert len(x.shape) == 2, \
+    assert x.ndim == 2, \
         f"The input dimension of x is {x.shape}, it must be 2D."
 
     # Check the input argument is validate or not.

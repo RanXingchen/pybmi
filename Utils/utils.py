@@ -103,12 +103,12 @@ class Array2mat():
         if type(x) == list:
             x = np.array(x)
         elif type(x) == torch.Tensor:
-            x = x.numpy() if x.device == 'cpu' else x.cpu().numpy()
+            x = x.cpu().numpy()
         # Check the type of x is validate.
         assert type(x) == np.ndarray, \
             'Wrong type of input: ' + str(type(x)) + '.'
         # Make sure the dimension of x is not greater than 2
-        D = len(x.shape)
+        D = x.ndim
         assert D <= 2, f'{D}D array is not supported for now!'
         # Convert the vector to row vectors.
         if D == 1 or x.shape[1] == 1:

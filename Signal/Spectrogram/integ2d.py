@@ -32,7 +32,7 @@ def integ2d(mat, x=None, y=None):
         y = np.linspace(1, m, m)
         y = np.reshape(y, (m, 1))
 
-    assert len(x.shape) == 2 and len(y.shape) == 2, \
+    assert x.ndim == 2 and y.ndim == 2, \
         "X and Y must have only two dimension."
 
     xrow, xcol = x.shape

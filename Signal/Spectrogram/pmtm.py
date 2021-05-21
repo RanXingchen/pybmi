@@ -67,10 +67,10 @@ def pmtm(x, NW=4, nfft=None, fs=None, dlt=True, method='adapt'):
            Applications", Cambridge University Press, 1993, pp. 368-370.
     """
 
-    assert len(x.shape) < 3, 'Dimension of input array out of range!'
+    assert x.ndim < 3, 'Dimension of input array out of range!'
 
     # Convert 1D vectors to 2D with one channel.
-    if len(x.shape) == 1:
+    if x.ndim == 1:
         x = x[:, np.newaxis]
     # Get the number of channels and sample points.
     N, C = x.shape

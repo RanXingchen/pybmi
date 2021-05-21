@@ -31,7 +31,7 @@ def wnanmean(X, W=None, axis=0):
         W = torch.from_numpy(W)
 
     # Dimension of X
-    D = len(X.shape)
+    D = X.ndim
     # Get the suitable shape of W can be used on later multiply.
     shape = np.ones(D, dtype=int).tolist()
     shape[axis] = X.shape[axis]
@@ -92,7 +92,7 @@ def wnanvar(X, W=None, bias=1, axis=0):
         W = torch.from_numpy(W)
 
     # Dimension of X
-    D = len(X.shape)
+    D = X.ndim
     # Get the suitable shape of W can be used on later multiply.
     shape = np.ones(D, dtype=int).tolist()
     shape[axis] = X.shape[axis]
