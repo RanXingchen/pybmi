@@ -240,4 +240,8 @@ class LFPReader():
             # Remove zeros rows from LFP and timestamp
             zeros_idx = np.reshape(lfp, (lfp.shape[0], -1)).mean(axis=-1) == 0
             lfp, timestamp = lfp[~zeros_idx], timestamp[~zeros_idx]
+            # The shape of LFP is (nbins, nch, nfreq, nlag)
+            #  -> permute it to (nbins, nch, nlag, nfreq)
+            lfp = np.transpose(lfp, (0, 1, 3, 2))
+            lfp = np.reshape(lfp, (lfp.shape[0], lfp.shape[1], -1))
         return lfp, timestamp
