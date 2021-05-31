@@ -1,8 +1,11 @@
-from dateutil.parser import parse
 import matlab
 import matlab.engine
 import numpy as np
 import torch
+import os
+import tkinter
+
+from dateutil.parser import parse
 
 
 def check_params(candidate, choices, arg_name):
@@ -38,6 +41,16 @@ def check_params(candidate, choices, arg_name):
 
     selected = candidate
     return selected
+
+
+def check_file(file_path, title='', file_types=(("all files", "*.*"))) -> str:
+    if not os.path.exists(file_path):
+        # Hidden the main window of Tk.
+        tkinter.Tk().withdraw()
+        # Popup the Open File UI. Get the file name and path.
+        file_path = tkinter.filedialog.askopenfilename(title=title,
+                                                       filetypes=file_types)
+    return file_path
 
 
 def npc_remove(x, npc=b'\x00', code='utf8'):
