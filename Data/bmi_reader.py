@@ -281,6 +281,11 @@ class BMIReader():
             self.binned_neural = data['neural']
             self.binned_nstamp = data['stamps']
             self.header['fs_neural'] = data['fs']
+            # Reshape the nstamp to equal (T, 1)
+            if self.binned_nstamp.shape[0] == 1:
+                self.binned_nstamp = self.binned_nstamp.T
+            assert self.binned_nstamp.shape[0] == self.binned_neural.shape[0],\
+                "Error shape of readed neural data."
         else:
             # Need to process first.
             if 'ns' in ext:
