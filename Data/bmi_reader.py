@@ -420,7 +420,8 @@ class BMIReader():
         i2 = header['index_labels'][1] + 1
         labels = raw_data[:, i1:i2]
         # Center-out behavior analysis.
-        if header['paradigm'].lower() in ['center-out', 'center out']:
+        if header['paradigm'].lower() in ['center-out', 'center out',
+                                          'centerout']:
             assert min(labels) <= g <= max(labels), "Invalid success label."
             assert min(labels) <= b <= max(labels), "Invalid failure label."
             # Sum all success labels in data as the total hold time.
@@ -494,6 +495,8 @@ class BMIReader():
             # trial end of masked out trail type.
             l1, l2 = label
             index = np.ones(self.binned_motion.shape[0], dtype=np.bool)
+            # The sambol represent the start of new trial.
+            new_trial = True
             for i, row in enumerate(self.binned_labels):
                 if i == 0:
                     trial_start, trial_end = 0, 0
@@ -501,12 +504,20 @@ class BMIReader():
 
                 if row == l1 and self.binned_labels[i - 1] != l1:
                     trial_start = i
-                elif row == l2 and self.binned_labels[i + 1] != l2:
-                    trial_end = i
+                    new_trial = True
+                elif row == l2 and (i == len(self.binned_labels) - 1 or
+                                    self.binned_labels[i + 1] != l2):
+                    if new_trial:
+                        trial_end = i
+                        # End of the trial, set new_trial to False.
+                        new_trial = False
 
                 # End of one whole trial
                 if trial_start < trial_end:
                     index[trial_start:trial_end + 1] = False
+                    # Set trail_start equal to trial_end to avoid between
+                    # trial's data be masked.
+                    trial_start = trial_end
         elif isinstance(label, int):
             index = ~(self.binned_labels[:, 0] == label)
 
@@ -630,8 +641,45 @@ class BMIReader():
         data = np.reshape(data, (data_points, self.header['columns']))
         return data, data_points
 
-    def _v1dot1(self, f):
-        print("Not implement yet!")
+    def _v1dot1(self, f, file_size):
+        f.seek(0, 0)
+        # Reading file headers.
+        self.header['version'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['subject'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['experimenter'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['paradigm'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['date'] = npc_remove(f.read(32), npc=b'\x00')
+        self.header['comment'] = npc_remove(f.read(256), npc=b'\x00')
+        # Time stamp index
+        self.header['index_stamps'] = [0, 0]
+        # Labels index
+        nl = int.from_bytes(f.read(4), 'little')
+        self.header['index_labels'] = [1, nl]
+        # Spikes index
+        ns = int.from_bytes(f.read(4), 'little')
+        self.header['index_spikes'] = [self.header['index_labels'][1] + 1,
+                                       self.header['index_labels'][1] + ns]
+        # Motion & target index
+        nk = int.from_bytes(f.read(4), 'little')
+        self.header['index_motion'] = [self.header['index_spikes'][1] + 1,
+                                       self.header['index_spikes'][1] + nk]
+        self.header['index_target'] = [self.header['index_motion'][1] + 1,
+                                       self.header['index_motion'][1] + nk]
+        self.header['fs_motion'] = int.from_bytes(f.read(4), 'little')
+        # This columns represent stamps, labels, spikes, motion, target,
+        # external_vel, internal_vel and c
+        self.header['columns'] = 1 + nl + ns + nk * 4 + 1
+        # End of reading the header.
+        # Compute the data size, which equal to file_size - header_size
+        data_size = file_size - f.tell()
+        data_points = data_size // (8 * self.header['columns'])
+        error = data_points * 8 * self.header['columns'] - data_size
+        assert error == 0, 'Reading BMI file failed. The data size' \
+                           'not divisible by the columns.'
+        # Reading the file data
+        data = array.array('d', f.read(data_size))
+        data = np.reshape(data, (data_points, self.header['columns']))
+        return data, data_points
 
     def _v1dot2(self, f):
         # Reading from file start.
@@ -685,7 +733,7 @@ class BMIReader():
         # Ideal timestamp array.
         idea_ts = np.linspace(0, nbins - 1, nbins) * step + stamps[0]
         # Check the idea binned timestamp is validate.
-        assert idea_ts[-1] < stamps[-1], 'Invalidate binned timestamp!'
+        assert idea_ts[-1] <= stamps[-1], 'Invalidate binned timestamp!'
         # Get the binned data according the idea timestamp.
         binned = []
         for ts in idea_ts:
