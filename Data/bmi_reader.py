@@ -150,8 +150,8 @@ class BMIReader():
         if self.method == 'pmtm':
             assert nbands == len(bands), "Error number of frequency bands."
 
-    def beh_read(self, file_path=None, fs_timestamp=30000, analyze=True,
-                 save_mat=True):
+    def beh_read(self, file_path=None, target='p', fs_timestamp=30000,
+                 analyze=True, save_mat=True):
         """
         Reading the behavioral data from the file path.
 
@@ -160,6 +160,9 @@ class BMIReader():
         filepath : str, optional
             The path of bmi file which will be readed. If it is None, a UI will
             pop out to ask user select one file. Default: None.
+        target : str, optional
+            The movement target will be generate. 'p' means position, 'v' means
+            velocity, and 'a' means acceleration. Default: 'p'.
         fs_timestamp : int, optional
             Sampling rate of time stamp. By default, the time stamp comes from
             recording NSP, which usually equal to 30000.
@@ -221,6 +224,14 @@ class BMIReader():
             i = np.argmax(start_list[1:] - start_list[:-1])
             # Update raw data.
             raw_data = raw_data[start_list[i]:start_list[i + 1]]
+            # When velocity required.
+            if 'v' in target:
+                i1 = self.header['index_motion'][0]
+                i2 = self.header['index_motion'][1] + 1
+                velocity = np.zeros((raw_data.shape[0], i2 - i1))
+                velocity[1:] = raw_data[1:, i1:i2] - raw_data[:-1, i1:i2]
+                # Put the velocity to the end column of the raw data.
+                raw_data = np.concatenate((raw_data, velocity), axis=-1)
             # Calculate the recording time duration.
             if self.header['fs_motion'] > 0:
                 mins = (data_points / self.header['fs_motion']) // 60
@@ -248,7 +259,15 @@ class BMIReader():
             # Motion
             i1 = self.header['index_motion'][0]
             i2 = self.header['index_motion'][1] + 1
-            self.binned_motion = binned_data[:, i1:i2]
+            if target == 'p':
+                self.binned_motion = binned_data[:, i1:i2]
+            elif target == 'v':
+                self.binned_motion = binned_data[:, (i1 - i2):]
+            elif target == 'pv':
+                self.binned_motion = np.concatenate(
+                    (binned_data[:, i1:i2], binned_data[:, (i1 - i2):]),
+                    axis=-1
+                )
             toc = time.time()
 
             if self.verbose:
@@ -341,8 +360,9 @@ class BMIReader():
                               'fs': self.header['fs_neural']})
         return self.binned_neural, self.binned_nstamp
 
-    def read(self, neu_filepath=None, beh_filepath=None, fs_timestamp=30000,
-             analyze=True, undesired_motion_labels=[], save_mat=True):
+    def read(self, neu_filepath=None, beh_filepath=None, target='p',
+             fs_timestamp=30000, analyze=True, undesired_motion_labels=[],
+             save_mat=True):
         """
         Parameters
         ----------
@@ -369,7 +389,7 @@ class BMIReader():
         # ------------------------------------
         # 1. Read the behavioral data
         # ------------------------------------
-        self.beh_read(beh_filepath, fs_timestamp, analyze, save_mat)
+        self.beh_read(beh_filepath, target, fs_timestamp, analyze, save_mat)
         # ------------------------------------
         # 2. Read the neural data
         # ------------------------------------
