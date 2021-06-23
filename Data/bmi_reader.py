@@ -282,7 +282,7 @@ class BMIReader():
                               'target': self.binned_target})
         return self.binned_motion, self.binned_bstamp
 
-    def neu_read(self, file_path, save_mat=True):
+    def neu_read(self, file_path, ch_index=None, save_mat=True):
         ext = (("MATLAB file", "*.mat"), ("NSx files", "*.ns3"),
                ("NSx files", "*.ns5"), ("all files", "*.*"))
         file_path = check_file(file_path, "Choose a neural data file...", ext)
@@ -319,6 +319,8 @@ class BMIReader():
                 self.header['fs_neural'] = int(raw_data['samp_per_s'])
                 # The data part.
                 raw_data = raw_data['data'].T
+                if ch_index is not None:
+                    raw_data = raw_data[:, ch_index]
                 # Calculate the timestep of raw data.
                 self.binned_nstamp = np.linspace(
                     t0, len(raw_data) - 1, len(raw_data), dtype=int
@@ -362,7 +364,7 @@ class BMIReader():
 
     def read(self, neu_filepath=None, beh_filepath=None, target='p',
              fs_timestamp=30000, analyze=True, undesired_motion_labels=[],
-             save_mat=True):
+             ch_index=None, save_mat=True):
         """
         Parameters
         ----------
@@ -393,7 +395,7 @@ class BMIReader():
         # ------------------------------------
         # 2. Read the neural data
         # ------------------------------------
-        self.neu_read(neu_filepath, save_mat)
+        self.neu_read(neu_filepath, ch_index, save_mat)
         # ------------------------------------
         # 3. Align behavioral and neural data
         # ------------------------------------
