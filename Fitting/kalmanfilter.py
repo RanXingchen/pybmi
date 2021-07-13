@@ -79,7 +79,7 @@ class KalmanFilter():
         SAB’02-workshop on motor control in humans and robots: On the
         interplay of real brains and artificial devices.
     """
-    def __init__(self, Z, X, eps=None):
+    def train(self, Z, X, eps=None):
         assert X.shape[0] == Z.shape[0], \
             'The state and measurement should have same number of time points!'
 
