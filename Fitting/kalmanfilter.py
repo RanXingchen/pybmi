@@ -42,10 +42,6 @@ class KalmanFilter():
         where T means the time steps and M means the feature
         dimensions. In the BCI application, it can be the
         movement or other behavior data.
-    eps : float, optional
-        In case of during the computation, X'X is not full rank,
-        the eps is added on the diagnol of the covariance matrix
-        to make sure it always have inverse matrix.
 
     Attributes
     ----------
@@ -79,7 +75,7 @@ class KalmanFilter():
         SAB’02-workshop on motor control in humans and robots: On the
         interplay of real brains and artificial devices.
     """
-    def train(self, Z, X, eps=None):
+    def train(self, Z, X):
         assert X.shape[0] == Z.shape[0], \
             'The state and measurement should have same number of time points!'
 
@@ -90,22 +86,12 @@ class KalmanFilter():
             X = torch.from_numpy(X)
 
         t, m = X.shape
-        m_eye = torch.eye(m, device=X.device, dtype=X.dtype)
-
-        if eps is None:
-            eps = np.sqrt(torch.finfo(X.dtype).eps) * m_eye
 
         X1, X2 = X[:-1], X[1:]
         # State Transition Model
-        self.A = torch.matmul(
-            X2.T.matmul(X1),
-            torch.pinverse(X1.T.matmul(X1) + eps)
-        )
+        self.A = torch.linalg.lstsq(X1, X2)[0].T
         # Measurement Model
-        self.H = torch.matmul(
-            Z.T.matmul(X),
-            torch.pinverse(X.T.matmul(X) + eps)
-        )
+        self.H = torch.linalg.lstsq(X, Z)[0].T
         # Process Noise
         e_sta = X2.T - torch.matmul(self.A, X1.T)
         self.W = torch.matmul(e_sta, e_sta.T) / (t - 1)
@@ -113,7 +99,7 @@ class KalmanFilter():
         e_mea = Z.T - torch.matmul(self.H, X.T)
         self.Q = torch.matmul(e_mea, e_mea.T) / t
         # State Covariance
-        self.P = m_eye
+        self.P = torch.matmul(X.T, X) / t
 
     def predict(self, Z, x0):
         """
@@ -164,7 +150,7 @@ class KalmanFilter():
             Pt = torch.matmul(torch.matmul(self.A, Pt), self.A.T) + self.W
             # Calculate Kalman gain of current step
             residual = torch.matmul(self.H.matmul(Pt), self.H.T) + self.Q
-            Kt = torch.matmul(Pt.matmul(self.H.T), torch.pinverse(residual))
+            Kt = torch.linalg.lstsq(residual.T, self.H.matmul(Pt.T))[0].T
             # Update the estimation by measurement.
             # * Do not use inplace operation.
             xt = xt + torch.matmul(Kt, zt.T - torch.matmul(self.H, xt.T)).T
