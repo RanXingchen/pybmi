@@ -1,4 +1,14 @@
-from .brPY import *                 # noqa
-from .align import align            # noqa
-from .bmi_reader import BMIReader   # noqa
-from .context import Context        # noqa
+from . import brPY
+from .align import align
+from .bmi_reader import BMIReader
+from .context import Context
+from .HTK import HTKFile
+
+
+__all__ = [
+    'brPY',
+    'align',
+    'BMIReader',
+    'Context',
+    'HTKFile'
+]
