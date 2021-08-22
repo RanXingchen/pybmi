@@ -5,7 +5,7 @@ import os
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from pybmi.fitting import EarlyStopping
+from pybmi.optimization import EarlyStopping
 from pybmi.stats import corrcoef
 
 
