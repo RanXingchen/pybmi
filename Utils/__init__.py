@@ -10,6 +10,7 @@ __all__ = [
     'check_file',
     'npc_remove',
     'is_date',
+    'epoch_time',
     'Array2mat',
     'generate_sequence_padding_mask'
 ]

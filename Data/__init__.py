@@ -3,6 +3,9 @@ from .align import align
 from .bmi_reader import BMIReader
 from .context import Context
 from .HTK import HTKFile
+from .htk_dataset import HTKDataset
+from .seq_preprocess import SequencePreprocessor
+from . import augmentation
 
 
 __all__ = [
@@ -10,5 +13,8 @@ __all__ = [
     'align',
     'BMIReader',
     'Context',
-    'HTKFile'
+    'HTKFile',
+    'HTKDataset',
+    'SequencePreprocessor',
+    'augmentation'
 ]
