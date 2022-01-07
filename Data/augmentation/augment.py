@@ -6,7 +6,7 @@ import torchvision.transforms.functional as TF
 import warnings
 
 from torch import Tensor
-from pybmi.signal import DTW
+from pybmi.signals import DTW
 from pybmi.utils import check_params
 from typing import List
 
@@ -120,7 +120,7 @@ class DataAugment(object):
         return x_.reshape(-1, N * F)
 
     def permutation(self, x: Tensor, y: Tensor,
-                    nPerm:int = 3, min_seg_length:int = 50):
+                    nPerm: int = 3, min_seg_length: int = 50):
         """
         Permutation the order of the sequence data.
 
@@ -147,7 +147,7 @@ class DataAugment(object):
             # min_seg_length. If not, redo the above step.
             if (segs[1:] - segs[:-1]).min() > min_seg_length:
                 break
-        #Permute x and y simutancely.
+        # Permute x and y simutancely.
         pos = 0
         indices = torch.randperm(nPerm)
         for i in indices:
@@ -184,7 +184,7 @@ class DataAugment(object):
         x = x.reshape(-1, F, N).permute(0, 2, 1).reshape(-1, N * F)
         return x
 
-    def padding(self, x: Tensor, padding: List[int]=None, fill=0,
+    def padding(self, x: Tensor, padding: List[int] = None, fill=0,
                 mode='constant'):
         """
         Padding the given neural grid on all sides with the given
@@ -260,11 +260,12 @@ class DataAugment(object):
         assert N * F == x.size(-1), \
             'Error occored for the computation of neural '\
             'array channels.'
-        
+
         log_ratio = torch.log(torch.tensor(ratio))
         i, j = -1, -1
         for _ in range(10):
-            target_area = N * torch.empty(1).uniform_(scale[0], scale[1]).item()
+            target_area = N * torch.empty(1).uniform_(scale[0], scale[1])
+            target_area = target_area.item()
             aspect_ratio = torch.exp(
                 torch.empty(1).uniform_(log_ratio[0], log_ratio[1])
             ).item()
@@ -302,7 +303,8 @@ class DataAugment(object):
         """
         ! The mixup had some problems.
         """
-        # Using DTW process additional sentence in order to have same length with original one.
+        # Using DTW process additional sentence in order to have same length
+        # with original one.
         x1_numpy = x1.cpu().numpy()
         x2_numpy = x2.cpu().numpy()
         y1_numpy = y1.cpu().numpy()
@@ -336,7 +338,7 @@ class DataAugment(object):
 
 if __name__ == '__main__':
     torch.manual_seed(42)
-    
+
     augmentor = DataAugment(p=1, w_array=8, h_array=9,
                             n_bands=21, methods=['rotation'])
     data = torch.randn((1, 267, 1512), device='cuda')

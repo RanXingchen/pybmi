@@ -12,7 +12,8 @@ class RandomSearch():
         Parameters
         ----------
         params_grid : dict
-            The parameter grid that contain all desired combinations of hyperparameters.
+            The parameter grid that contain all desired combinations of
+            hyperparameters.
         max_iters : int, optional
             The maximum iterations for random search.
 
@@ -24,8 +25,9 @@ class RandomSearch():
             The optimal combination of the searching result,
             which detemined by the BEST_SCORE.
         best_model : any
-            The optimal model of the searching result, which detemined by the BEST_SCORE.
-            The model type is determined by the user specified training function.
+            The optimal model of the searching result, which detemined by the
+            BEST_SCORE. The model type is determined by the user specified
+            training function.
         best_iter : int
             The number of iteration of best scores.
         """
@@ -43,9 +45,9 @@ class RandomSearch():
         Parameters
         ----------
         train_fn : function
-            User's training function, which takes the dictionary of all hyperparameters
-            as input. And the output of this function should be the MODEL and the
-            validation SCORE.
+            User's training function, which takes the dictionary of all
+            hyperparameters as input. And the output of this function should
+            be the MODEL and the validation SCORE.
         save_name : str
             The save name of the BEST_MODEL.
         verbose : bool
@@ -60,14 +62,15 @@ class RandomSearch():
             # by the the number i.
             random.seed(i)
             # Obtain the random parameters.
-            hyper_params = {k: random.sample(v, 1)[0] for k, v in self.params_grid.items()}
+            hyper_params = {k: random.sample(v, 1)[0]
+                            for k, v in self.params_grid.items()}
 
             if verbose:
                 print(f'\n=====Iteration {i + 1}=====')
                 print('Current searching hyperparameters combination is:')
                 print(json.dumps(hyper_params, indent=4))
-            # Run the training function, this function only take the parameters as input.
-            # And it returns the models and cv scores.
+            # Run the training function, this function only take the
+            # parameters as input. And it returns the models and cv scores.
             model, score = train_fn(hyper_params)
             # Update the best results.
             if self.best_score > score:
@@ -80,7 +83,9 @@ class RandomSearch():
                     torch.save(model.state_dict(), save_name)
                 # Show the best parameters in screen.
                 if verbose:
-                    print(f'End of {i + 1} iteration. Current best cv score: {self.best_score}.')
-                    print(f'Current best hyperparameters combination is from {self.best_iter}: ')
+                    print(f'End of {i + 1} iteration.'
+                          f'Current best cv score: {self.best_score}.')
+                    print('Current best hyperparameters combination'
+                          f'is from {self.best_iter}: ')
                     print(json.dumps(self.best_hyper_params, indent=4))
         return self.best_model, self.best_score
