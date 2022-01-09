@@ -8,7 +8,7 @@ from joblib import Parallel, delayed
 from struct import unpack
 from pybmi.data.brPY.brpylib import NsxFile
 from pybmi.utils.utils import npc_remove, check_params, check_file
-from pybmi.signal.spectrogram import pmtm, tfrscalo
+from pybmi.signals.spectrogram import pmtm, tfrscalo
 
 
 class BMIReader():
@@ -364,7 +364,7 @@ class BMIReader():
 
     def read(self, neu_filepath=None, beh_filepath=None, target='p',
              fs_timestamp=30000, analyze=True, undesired_motion_labels=[],
-             ch_index=None, save_mat=True):
+             ch_index=None, split_trials=False, pad=0, save_mat=True):
         """
         Parameters
         ----------
@@ -383,6 +383,12 @@ class BMIReader():
             when paradigm is Center-Out, Success Rate, Total Number of Trials,
             Hold Time, Failed Time, Average Time of Each Successed Trial etc.
             will be calculated.
+        split_trials : bool, optional
+            Indicate whether the processed neural and behavior data stored as
+            one vector or split in single-trial style. Default: False.
+        pad : int, optional
+            The padding value when split_trials is True. Only used when
+            split_trials is True. Default: 0.
         save_mat : bool, optional
             Choose whether need to save processed LFP as a mat file. Consider
             the time-consuming of calculating LFP from NSx, saving the LFP to
@@ -405,6 +411,11 @@ class BMIReader():
         # ------------------------------------
         for label in undesired_motion_labels:
             self.filter(label)
+        # ------------------------------------
+        # 5. Get single trial data when necessary
+        # ------------------------------------
+        if split_trials:
+            self.pad_idx = self._get_single_trials(self.label_success, p=pad)
         return self.binned_neural, self.binned_motion
 
     def analysis(self, raw_data, g, b, verbose=False):
@@ -856,6 +867,81 @@ class BMIReader():
             neural = np.transpose(neural, (0, 1, 3, 2))
             neural = np.reshape(neural, (neural.shape[0], neural.shape[1], -1))
         return neural
+
+    def _get_single_trials(self, end_label, p=0) -> np.ndarray:
+        """
+        Assuming this fuction's input data is all passed
+        after the filter to mask out the failure trials.
+
+        Parameters
+        ----------
+        end_label : int
+            The end_label should be the labels indicate of trials end.
+        p : int
+            The padding value to pad the trials which length smaller than
+            MAX LENGTH.
+        """
+        bstamp, nstamp = [], []
+        motion, neural, spikes, = [], [], []
+        labels, target = [], []
+
+        max_len = 0
+        # Count the statistics behavior of the data
+        for i, label in enumerate(self.binned_labels):
+            # Skip the 1st time step
+            if i == 0:
+                trial_start = i
+                continue
+            # The start of current trial.
+            if label != end_label and self.binned_labels[i - 1] == end_label:
+                trial_start = i
+            # The first finish point of this trial is success label.
+            elif label == end_label and self.binned_labels[i - 1] != end_label:
+                bstamp.append(self.binned_bstamp[trial_start:i + 1])
+                nstamp.append(self.binned_nstamp[trial_start:i + 1])
+                motion.append(self.binned_motion[trial_start:i + 1])
+                neural.append(self.binned_neural[trial_start:i + 1])
+                spikes.append(self.binned_spikes[trial_start:i + 1])
+                labels.append(self.binned_labels[trial_start:i + 1])
+                target.append(self.binned_target[trial_start:i + 1])
+                # Get the max len
+                if max_len < len(bstamp[-1]):
+                    max_len = len(bstamp[-1])
+        # Stack all trials to one ndarray. Use padding value to pad the trials
+        # which lenght smaller than max_len.
+
+        def _w(x):
+            """
+            Computing the pad width.
+            """
+            ndim = np.ndim(x)
+            ret = ((0, max_len - len(x)),)
+            for _ in range(1, ndim):
+                ret += ((0, 0),)
+            return ret
+
+        self.binned_bstamp = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in bstamp], axis=0
+        )
+        self.binned_nstamp = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in nstamp], axis=0
+        )
+        self.binned_motion = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in motion], axis=0
+        )
+        self.binned_neural = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in neural], axis=0
+        )
+        self.binned_spikes = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in spikes], axis=0
+        )
+        self.binned_labels = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in labels], axis=0
+        )
+        self.binned_target = np.stack(
+            [np.pad(x, _w(x), constant_values=p) for x in target], axis=0
+        )
+        return np.stack([max_len - len(x) for x in motion], axis=0)
 
 
 if __name__ == '__main__':

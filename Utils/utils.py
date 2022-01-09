@@ -46,7 +46,7 @@ def check_params(candidate, choices, arg_name):
     return selected
 
 
-def check_file(file_path, title='', 
+def check_file(file_path, title='',
                file_types=(("all files", "*.*"))) -> str:
     if not os.path.exists(file_path):
         # Hidden the main window of Tk.
@@ -114,6 +114,50 @@ def epoch_time(start_time: int, end_time: int):
     elapsed_mins = int(elapsed_time / 60)
     elapsed_secs = int(elapsed_time - elapsed_mins * 60)
     return elapsed_mins, elapsed_secs
+
+
+def update_dict(dict1: dict, dict2: dict):
+    """
+    Update the target dict by reference dict when both variable have
+    the same keys.
+
+    Parameters
+    ----------
+    dict1 : dict
+        The target dict.
+    dict2 : dict
+        The reference dict.
+
+    Returns
+    -------
+    new_dict : dict
+        The updated dictionary according to the reference.
+    """
+    d = dict1.copy()
+
+    for key in dict1.keys():
+        if key in dict2.keys():
+            d[key] = dict2[key]
+    return d
+
+
+def find_padding_index(data: torch.Tensor, padding_value):
+    """
+    Find the padding index from data by the padding_value.
+    """
+    if padding_value != padding_value:
+        # Padding value is nan.
+        iPad = torch.isnan(data)
+    elif isinstance(padding_value, int) or \
+            isinstance(padding_value, float):
+        iPad = data == padding_value
+    elif padding_value is None:
+        # No padding value.
+        iPad = torch.zeros((data.shape[0], data.shape[1]),
+                           dtype=bool, device=data.device)
+    else:
+        raise ValueError("Unsupported type of padding value.")
+    return iPad
 
 
 class Array2mat():
