@@ -38,7 +38,7 @@ class LFADS(nn.Module):
     using sequential auto-encoders,” Nature Methods, vol. 15, no. 10,
     pp. 805-815, Oct. 2018, doi: 10.1038/s41592-018-0109-9.
     """
-    def __init__(self, N, T, ncomponents, dt, model_hyperparams=None,
+    def __init__(self, N, ncomponents, dt, model_hyperparams=None,
                  run_name=''):
         """
         Create an LFADS model.
@@ -60,7 +60,6 @@ class LFADS(nn.Module):
         super(LFADS, self).__init__()
 
         self.N = N
-        self.T = T
         self.f_dim = ncomponents
         self.dt = dt
         self.run_name = run_name
@@ -181,7 +180,7 @@ class LFADS(nn.Module):
         x = self.drop(x)
         # Encode data into forward and backward generator encoders to produce
         # enc_g and enc_c for generator initial states and conditions.
-        for t in range(1, self.T + 1):
+        for t in range(1, x.shape[1] + 1):
             # Encoder for generator.
             h_enc_g[0] = self.encoder_gf(x[:, t - 1], h_enc_g[0].clone())
             h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
@@ -210,16 +209,17 @@ class LFADS(nn.Module):
         sampled initial conditions (g0).
         """
         device = g.device
+        T = h_enc_c.shape[1]
         # Initialize factors by g0.
         f0 = self.fc_factors(g)
-        factors = f0.unsqueeze(1).repeat(1, self.T, 1)
+        factors = f0.unsqueeze(1).repeat(1, T, 1)
 
         u_posterior = {
-            'mean': torch.zeros(g.shape[0], self.T, self.u_dim).to(device),
-            'logv': torch.zeros(g.shape[0], self.T, self.u_dim).to(device)
+            'mean': torch.zeros(g.shape[0], T, self.u_dim).to(device),
+            'logv': torch.zeros(g.shape[0], T, self.u_dim).to(device)
         }
 
-        for t in range(self.T):
+        for t in range(T):
             # Concatenate h_enc_cf and h_enc_cb outputs at time t with factors
             # at time t - 1 as input to controller.
             h_enc_c_f = torch.cat((h_enc_c[:, t].clone(), factors[:, t]), -1)
@@ -256,7 +256,6 @@ class LFADS(nn.Module):
         """
         B, T, N = x.shape
 
-        assert T == self.T, "The input time steps shoule be same with T."
         assert N == self.N, "The input features should be same with N."
 
         # 1. Estimate the prior mean and variance for g0 and u.
@@ -264,7 +263,7 @@ class LFADS(nn.Module):
 
         # 2. Initialize hidden state of encoder for generator and Controller.
         h_enc_g = self._init_hidden_state((B, self.enc_g_dim), True, x.device)
-        h_enc_c = self._init_hidden_state((B, self.T + 1, self.enc_c_dim),
+        h_enc_c = self._init_hidden_state((B, T + 1, self.enc_c_dim),
                                           True, x.device)
         # 3. Encode the input data for generator and controller respectively.
         h_enc_g, h_enc_c = self.encode(x, h_enc_g, h_enc_c)
@@ -291,7 +290,8 @@ class LFADS(nn.Module):
         dl = DataLoader(dts, batch_size=batch_size)
 
         # Define the criteria
-        rec_criteria = nn.PoissonNLLLoss(log_input=False, reduction='sum')
+        rec_criteria = nn.PoissonNLLLoss(log_input=False, full=True,
+                                         reduction='sum')
         gkl_criteria = bmi.optimization.loss.GaussianKLDivLoss(reduction='sum')
 
         loss, loss_rec, loss_kl = 0, 0, 0
@@ -319,7 +319,7 @@ class LFADS(nn.Module):
                                 g0_posterior['mean'], g0_posterior['logv'])
             kl_g /= inp.shape[0]
             kl_c = 0
-            for t in range(self.T):
+            for t in range(inp.shape[1]):
                 real_batch_size = (~iPad[:, t]).float().sum()
                 if real_batch_size == 0:
                     break
@@ -375,7 +375,8 @@ class LFADS(nn.Module):
         # Create the training dataloader
         t_dl = DataLoader(train_dts, self.batch_size, True, drop_last=True)
         # Define the criteria
-        rec_criteria = nn.PoissonNLLLoss(log_input=False, reduction='sum')
+        rec_criteria = nn.PoissonNLLLoss(log_input=False, full=True,
+                                         reduction='sum')
         gkl_criteria = bmi.optimization.loss.GaussianKLDivLoss(reduction='sum')
         # Initialize tensorboard
         if use_tensorboard:
@@ -423,7 +424,7 @@ class LFADS(nn.Module):
                                     g0_posterior['mean'], g0_posterior['logv'])
                 kl_g /= self.batch_size
                 kl_c = 0
-                for t in range(self.T):
+                for t in range(inp.shape[1]):
                     real_batch_size = (~iPad[:, t]).float().sum()
                     if real_batch_size == 0:
                         break
@@ -436,7 +437,7 @@ class LFADS(nn.Module):
                 kl_loss = kl_g + kl_c
                 # Reconstruction loss
                 rec_loss = rec_criteria(t_rates[~iPad], inp[~iPad]) /\
-                    self.batch_size
+                    inp.shape[0]
                 # Calculate regularizer weights
                 w_kl, w_l2 = self._weight_scheduler(current_step)
                 # Sum all the loss

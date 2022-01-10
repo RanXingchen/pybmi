@@ -23,3 +23,9 @@ class Normalization():
             return (x - self.mu) / self.sigma
         elif self.mode == 'min-max':
             return (x - self.min_val) / (self.max_val - self.min_val)
+
+    def inverse(self, x: torch.Tensor):
+        if self.mode == 'z-score':
+            return x * self.sigma + self.mu
+        elif self.mode == 'min-max':
+            return x * (self.max_val - self.min_val) + self.min_val
