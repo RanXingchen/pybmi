@@ -19,14 +19,30 @@ import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
 
 from torch import Tensor
-from torch.nn.parameter import Parameter
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from .lfads_defaultparams import default_hyperparams
 from .lfads_utils import plot_traces, plot_factors
+
+
+def weights_init(m: nn.Module):
+    """
+    The weight initialization is modified from the standard PyTorch,
+    which is uniform. Instead, the weights are drawn from a normal
+    distribution with mean 0 and std = 1/sqrt(K) where K is the size of
+    the input dimension. This helps prevent vanishing/exploding gradients
+    by keeping the eigenvalues of the Jacobian close to 1.
+    """
+    with torch.no_grad():
+        for name, p in m.named_parameters():
+            if 'weight' in name:
+                k = p.shape[1]      # Dimensionality of input.
+                # Inplace resetting W ~ N(0, 1/sqrt(K))
+                p.data.normal_(std=k ** -0.5)
 
 
 class LFADS(nn.Module):
@@ -70,15 +86,20 @@ class LFADS(nn.Module):
         # NETWORK LAYERS INIT
         # -----------------------
 
-        # Forward/Backward Encoder for Generator
-        self.encoder_gf = nn.GRUCell(self.N, self.enc_g_dim)
-        self.encoder_gb = nn.GRUCell(self.N, self.enc_g_dim)
-        # Forward/Backward Encoder for Controller
-        self.encoder_cf = nn.GRUCell(self.N, self.enc_c_dim)
-        self.encoder_cb = nn.GRUCell(self.N, self.enc_c_dim)
+        # BiRNN Encoder for Generator
+        self.encoder_g = nn.GRU(self.N, self.enc_g_dim, bidirectional=True,
+                                batch_first=True)
+        # FC layer to estimate posterior of g0.
+        self.fc_g0 = nn.Linear(2 * self.enc_g_dim, self.g_dim * 2)
+        # BiRNN Encoder for Controller
+        if self.enc_c_dim > 0:
+            self.encoder_c = nn.GRU(self.N, self.enc_c_dim, bidirectional=True,
+                                    batch_first=True)
         # Controller
-        self.controller = nn.GRUCell(self.enc_c_dim * 2 + self.f_dim,
-                                     self.c_dim)
+        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+            self.controller = nn.GRUCell(self.enc_c_dim * 2 + self.f_dim,
+                                         self.c_dim)
+            self.fc_u = nn.Linear(self.c_dim, self.u_dim * 2)
         # Generator
         self.generator = nn.GRUCell(self.u_dim, self.g_dim)
 
@@ -88,10 +109,6 @@ class LFADS(nn.Module):
         # These layers takes input:
         #  - the forward encoder for g/c at time t (h_enc[t])
         #  - the backward encoder for g/c at time 1 (h_enc[1]]
-        self.fc_g0mean = nn.Linear(2 * self.enc_g_dim, self.g_dim)
-        self.fc_g0logv = nn.Linear(2 * self.enc_g_dim, self.g_dim)
-        self.fc_umean = nn.Linear(self.c_dim, self.u_dim)
-        self.fc_ulogv = nn.Linear(self.c_dim, self.u_dim)
         # Factors from generator output.
         self.fc_factors = nn.Linear(self.g_dim, self.f_dim)
         # Estimate logrates from factors.
@@ -101,26 +118,8 @@ class LFADS(nn.Module):
 
         # -----------------------
         # WEIGHT INIT
-        #
-        # The weight initialization is modified from the standard PyTorch,
-        # which is uniform. Instead, the weights are drawn from a normal
-        # distribution with mean 0 and std = 1/sqrt(K) where K is the size of
-        # the input dimension. This helps prevent vanishing/exploding gradients
-        # by keeping the eigenvalues of the Jacobian close to 1.
         # -----------------------
-
-        # Step through all layers and adjust the weight initiazition method.
-        for m in self.modules():
-            if isinstance(m, nn.GRUCell):
-                # GRU layer, update using input and recurrent weight
-                k_ih = m.weight_ih.shape[1]     # I(t) -> H(t)
-                k_hh = m.weight_hh.shape[1]     # H(t - 1) -> H(t)
-                m.weight_ih.data.normal_(std=k_ih ** -0.5)
-                m.weight_hh.data.normal_(std=k_hh ** -0.5)
-            elif isinstance(m, nn.Linear):
-                # FC layer, update using input dimensionality
-                k = m.in_features   # dimensionality of the inputs
-                m.weight.data.normal_(std=k ** -0.5)
+        weights_init(self)
         # Row-normalize fc_factors (bullet-point 11 of section 1.9 of online
         # methods). This is used to keep the factors relatively evenly scaled
         # with respect to each other.
@@ -130,10 +129,17 @@ class LFADS(nn.Module):
         # --------------------------
         # LEARNABLE PRIOR PARAMETERS INIT
         # --------------------------
-        self.g0_prior_mu = Parameter(torch.tensor(0.0))
-        self.u_prior_mu = Parameter(torch.tensor(0.0))
-        self.g0_prior_logkappa = Parameter(torch.tensor(self.kappa).log())
-        self.u_prior_logkappa = Parameter(torch.tensor(self.kappa).log())
+        one_g = torch.ones((self.g_dim,), device='cuda')
+        self.g0_prior = {
+            'mean': nn.Parameter(one_g * 0.0),
+            'logv': nn.Parameter(one_g * np.log(self.kappa))
+        }
+        one_u = torch.ones((self.u_dim,), device='cuda')
+        self.u_prior_gp = {
+            'mean': nn.Parameter(one_u * 0.0),
+            'logv': nn.Parameter(one_u * np.log(self.kappa)),
+            'logt': nn.Parameter(one_u * np.log(10))
+        }
 
         # --------------------------
         # Useful training variables INIT
@@ -149,17 +155,7 @@ class LFADS(nn.Module):
             self.parameters(), lr=self.lr, eps=self.epsilon, betas=self.betas
         )
 
-    def prior_estimate(self, b, device='cpu'):
-        g0_mean = torch.ones(b, self.g_dim).to(device) * self.g0_prior_mu
-        g0_logv = torch.ones(b, self.g_dim).to(device) * self.g0_prior_logkappa
-        u_mean = torch.ones(b, self.u_dim).to(device) * self.u_prior_mu
-        u_logv = torch.ones(b, self.u_dim).to(device) * self.u_prior_logkappa
-
-        g0_prior = {'mean': g0_mean, 'logv': g0_logv}
-        u_prior = {'mean': u_mean, 'logv': u_logv}
-        return g0_prior, u_prior
-
-    def encode(self, x: Tensor, h_enc_g: Tensor, h_enc_c: Tensor):
+    def encode(self, x: Tensor, h: tuple):
         """
         Function to encode the data with the forward and backward encoders.
 
@@ -167,83 +163,81 @@ class LFADS(nn.Module):
         ----------
         x : Tensor
             Tensor of size [batch size, time-steps, input dims]
-        h_enc_g : Tensor
-            The hidden state of the encoder for generator.
-            Shape [2, Batch size, encoder_g dim], where the 0 is the forward
-            and 1 is the backward.
-        h_enc_c : Tensor
-            The hidden state of the encoder for controller.
-            Shape [2, Batch size, encoder_c dim], where the 0 is the forward
+        h : tuple
+            tuple of (h_enc_g, h_enc_c)
+            The hidden state of the encoder for generator and controller.
+            Shape [2, Batch size, encoder_g/c dim], where the 0 is the forward
             and 1 is the backward.
         """
+        # Resets parameter data pointer so that they can use faster code paths.
+        self.encoder_g.flatten_parameters()
+        if self.enc_c_dim > 0:
+            self.encoder_c.flatten_parameters()
+
+        # Get initial hidden state of h_enc_g and h_enc_c
+        h_enc_g, h_enc_c = h
+
         # Dropout some data
         x = self.drop(x)
-        # Encode data into forward and backward generator encoders to produce
-        # enc_g and enc_c for generator initial states and conditions.
-        for t in range(1, x.shape[1] + 1):
-            # Encoder for generator.
-            h_enc_g[0] = self.encoder_gf(x[:, t - 1], h_enc_g[0].clone())
-            h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
-            # Clip the value of the output.
-            h_enc_g = torch.clamp(h_enc_g, max=self.clip_val)
-            # Encoder for controller.
-            h_enc_c[0, :, t] = self.encoder_cf(
-                x[:, t - 1], h_enc_c[0, :, t - 1].clone()
-            )
-            h_enc_c[1, :, -(t + 1)] = self.encoder_cb(
-                x[:, -t], h_enc_c[1, :, -t].clone()
-            )
-            # Clip the value of the output.
-            h_enc_c = torch.clamp(h_enc_c, max=self.clip_val)
-
-        # Concatenate forward/backward hidden state for gen and con.
+        # Run bidirectional RNN over data
+        _, h_enc_g = self.encoder_g(x, h_enc_g.contiguous())
+        h_enc_g = self.drop(h_enc_g.clamp(-self.clip_val, self.clip_val))
+        # Concatenate forward/backward hidden state for generator.
         h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=-1)
-        # Note: the h_enc_cf start at t + 1, because the first index are 0.
-        # The same reason for h_enc_cb end at -1.
-        h_enc_c = torch.cat((h_enc_c[0, :, 1:], h_enc_c[1, :, :-1]), dim=-1)
-        return h_enc_g, h_enc_c
 
-    def generate(self, g: Tensor, h_enc_c: Tensor, h_c: Tensor):
+        # Estimating g0 posterior distribution
+        g0_mean, g0_logv = torch.split(self.fc_g0(h_enc_g), self.g_dim, dim=-1)
+        g0_posterior = {'mean': g0_mean, 'logv': g0_logv}
+
+        # Get output of encoder for controller if exist.
+        if self.enc_c_dim > 0:
+            out_enc_c, _ = self.encoder_c(x, h_enc_c.contiguous())
+            out_enc_c = out_enc_c.clamp(-self.clip_val, self.clip_val)
+            return g0_posterior, out_enc_c
+        else:
+            return g0_posterior, None
+
+    def generate(self, g: Tensor, out_enc_c: Tensor, h_c: Tensor):
         """
         Generates the rates using the controller encoder outputs and the
         sampled initial conditions (g0).
         """
         device = g.device
-        T = h_enc_c.shape[1]
-        # Initialize factors by g0.
-        f0 = self.fc_factors(g)
-        factors = f0.unsqueeze(1).repeat(1, T, 1)
+        T = out_enc_c.shape[1]
 
+        # Prepare the sequence container.
+        factors = torch.zeros(g.shape[0], T, self.f_dim).to(device)
+        gen_inp = torch.zeros(g.shape[0], T, self.u_dim).to(device)
         u_posterior = {
             'mean': torch.zeros(g.shape[0], T, self.u_dim).to(device),
             'logv': torch.zeros(g.shape[0], T, self.u_dim).to(device)
         }
 
+        # Initialize factors by g0.
+        f = self.fc_factors(self.drop(g))
         for t in range(T):
             # Concatenate h_enc_cf and h_enc_cb outputs at time t with factors
             # at time t - 1 as input to controller.
-            h_enc_c_f = torch.cat((h_enc_c[:, t].clone(), factors[:, t]), -1)
-            h_enc_c_f = self.drop(h_enc_c_f)
+            out_enc_c_with_f = torch.cat((out_enc_c[:, t], f), dim=-1)
             # Update controller with controller encoder outputs
-            h_c = self.controller(h_enc_c_f, h_c)
-            h_c = torch.clamp(h_c, min=0.0, max=self.clip_val)
+            h_c = self.controller(self.drop(out_enc_c_with_f), h_c)
+            h_c = torch.clamp(h_c, min=-self.clip_val, max=self.clip_val)
             # Calculate posterior distribution parameters for inferred inputs
             # from controller state
-            u_posterior['mean'][:, t] = self.fc_umean(h_c)
-            u_posterior['logv'][:, t] = self.fc_ulogv(h_c)
+            u_posterior['mean'][:, t], u_posterior['logv'][:, t] = \
+                torch.split(self.fc_u(h_c), self.u_dim, dim=-1)
             # Sample inputs for generator from u(t) posterior distribution
             u = torch.randn(g.shape[0], self.u_dim).to(device) * \
                 torch.exp(0.5 * u_posterior['logv'][:, t]) + \
                 u_posterior['mean'][:, t]
+            gen_inp[:, t] = u
             # Update generator
-            g = self.drop(torch.clamp(self.generator(u, g), 0, self.clip_val))
+            g = self.generator(u, g)
+            g = torch.clamp(g, -self.clip_val, self.clip_val)
             # Generate factors from generator state
-            factors[:, t] = self.fc_factors(g)
-        # Generate rates from factor state
-        rates = torch.exp(torch.clamp(
-            self.fc_logrates(factors), -self.clip_val, self.clip_val
-        ))
-        return u_posterior, factors, rates
+            f = self.fc_factors(self.drop(g))
+            factors[:, t] = f
+        return u_posterior, factors, gen_inp
 
     def forward(self, x: Tensor):
         """
@@ -254,34 +248,30 @@ class LFADS(nn.Module):
         x : Tensor
             Single-trial spike data. shape [batch size, time-steps, input dim]
         """
-        B, T, N = x.shape
+        B, _, N = x.shape
 
         assert N == self.N, "The input features should be same with N."
 
-        # 1. Estimate the prior mean and variance for g0 and u.
-        g0_prior, u_prior = self.prior_estimate(B, x.device)
-
-        # 2. Initialize hidden state of encoder for generator and Controller.
+        # 1. Initialize hidden state of encoder for generator and Controller.
         h_enc_g = self._init_hidden_state((B, self.enc_g_dim), True, x.device)
-        h_enc_c = self._init_hidden_state((B, T + 1, self.enc_c_dim),
-                                          True, x.device)
-        # 3. Encode the input data for generator and controller respectively.
-        h_enc_g, h_enc_c = self.encode(x, h_enc_g, h_enc_c)
-
-        # 4. Estimating g0 posterior distribution
-        g0_mean = self.fc_g0mean(self.drop(h_enc_g))
-        g0_logv = (self.fc_g0logv(self.drop(h_enc_g)).exp() + 0.0001).log()
-        g0_posterior = {'mean': g0_mean, 'logv': g0_logv}
-        # Sample initial conditions for generator from posterior
+        h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True, x.device)
+        # 2. Encode the input data for generator and controller respectively.
+        g0_posterior, out_enc_c = self.encode(x, (h_enc_g, h_enc_c))
+        # 3. Sample initial conditions for generator from posterior
         g0 = torch.randn(B, self.g_dim).to(x.device) * \
-            (0.5 * g0_logv).exp() + g0_mean
+            (0.5 * g0_posterior['logv']).exp() + g0_posterior['mean']
 
         # Initialize hidden state for controller.
         h_c = self._init_hidden_state((B, self.c_dim), device=x.device)
-        # 5. Generate factors and rates.
-        u_posterior, factors, rates = self.generate(g0, h_enc_c, h_c)
+        # 4. Generate factors and rates.
+        u_posterior, factors, inp_g = self.generate(g0, out_enc_c, h_c)
+        # Instantiate AR1 process as mean and variance per time step
+        self.u_prior = self._gp_to_normal(self.u_prior_gp, inp_g)
+
+        # 5. Generate rates from factor state
+        rates = torch.exp(self.fc_logrates(factors))
         # Generate factors.
-        return g0_prior, u_prior, g0_posterior, u_posterior, factors, rates
+        return g0_posterior, u_posterior, factors, rates
 
     def predict(self, dts, pad=None, batch_size=None):
         if batch_size is None:
@@ -307,15 +297,14 @@ class LFADS(nn.Module):
             # Replace the padding value to 0.
             inp[iPad] = 0
             with torch.no_grad():
-                g0_prior, u_prior, g0_posterior, u_posterior, \
-                    f, r = self(inp)
+                g0_posterior, u_posterior, f, r = self(inp)
                 factors.append(f)
                 rates.append(r)
 
             # Loss computation
 
             # Gaussian KL Div loss
-            kl_g = gkl_criteria(g0_prior['mean'], g0_prior['logv'],
+            kl_g = gkl_criteria(self.g0_prior['mean'], self.g0_prior['logv'],
                                 g0_posterior['mean'], g0_posterior['logv'])
             kl_g /= inp.shape[0]
             kl_c = 0
@@ -324,8 +313,8 @@ class LFADS(nn.Module):
                 if real_batch_size == 0:
                     break
                 kl_c += gkl_criteria(
-                    u_prior['mean'][~iPad[:, t]],
-                    u_prior['logv'][~iPad[:, t]],
+                    self.u_prior['mean'][:, t][~iPad[:, t]],
+                    self.u_prior['logv'][:, t][~iPad[:, t]],
                     u_posterior['mean'][:, t][~iPad[:, t]],
                     u_posterior['logv'][:, t][~iPad[:, t]]
                 ) / real_batch_size
@@ -410,8 +399,7 @@ class LFADS(nn.Module):
 
                 self.zero_grad()
                 # Forward
-                g0_prior, u_prior, g0_posterior, u_posterior, \
-                    t_factors, t_rates = self(inp)
+                g0_posterior, u_posterior, t_factors, t_rates = self(inp)
 
                 # Loss computation
 
@@ -420,8 +408,10 @@ class LFADS(nn.Module):
                 l2_c = self._gru_hh_l2_loss(self.controller, self.l2_c_scale)
                 l2_loss = l2_g + l2_c
                 # Gaussian KL Div loss
-                kl_g = gkl_criteria(g0_prior['mean'], g0_prior['logv'],
-                                    g0_posterior['mean'], g0_posterior['logv'])
+                kl_g = gkl_criteria(
+                    self.g0_prior['mean'], self.g0_prior['logv'],
+                    g0_posterior['mean'], g0_posterior['logv']
+                )
                 kl_g /= self.batch_size
                 kl_c = 0
                 for t in range(inp.shape[1]):
@@ -429,8 +419,8 @@ class LFADS(nn.Module):
                     if real_batch_size == 0:
                         break
                     kl_c += gkl_criteria(
-                        u_prior['mean'][~iPad[:, t]],
-                        u_prior['logv'][~iPad[:, t]],
+                        self.u_prior['mean'][:, t][~iPad[:, t]],
+                        self.u_prior['logv'][:, t][~iPad[:, t]],
                         u_posterior['mean'][:, t][~iPad[:, t]],
                         u_posterior['logv'][:, t][~iPad[:, t]]
                     ) / real_batch_size
@@ -743,6 +733,32 @@ class LFADS(nn.Module):
                         '4_Gradient_norms/%i_%s' % (i, name),
                         odict.get(name).weight.grad.data.norm(), current_step
                     )
+
+    def _gp_to_normal(self, prior, process):
+        '''
+        Convert gaussian process with given process mean, process log-variance,
+        process tau, and realized process to mean and log-variance of diagonal
+        Gaussian for each time-step
+        '''
+        gp_mean, gp_logv, gp_logt = prior['mean'], prior['logv'], prior['logt']
+        device = gp_mean.device
+        shape = (1, process.shape[0], process.shape[-1])
+
+        tau = torch.exp(-1 / gp_logt.exp())
+
+        mean = gp_mean * torch.ones(shape).to(device)   # (1, B, F)
+        m = gp_mean + (process[:, :-1].permute(1, 0, 2) - gp_mean) * tau
+        mean = torch.cat((mean, m))
+
+        logv = gp_logv * torch.ones(shape).to(device)
+        v = gp_logv * torch.ones(process.shape, device=device)[:, :-1].\
+            permute(1, 0, 2)
+        logv = torch.cat((logv, torch.log(1 - tau.pow(2)) + v))
+
+        _prior = {}
+        _prior['mean'] = mean.permute(1, 0, 2)
+        _prior['logv'] = logv.permute(1, 0, 2)
+        return _prior
 
     def _set_params(self, params: dict):
         """

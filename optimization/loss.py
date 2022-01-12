@@ -71,4 +71,4 @@ class GaussianKLDivLoss(nn.Module):
         elif self.reduction == 'sum':
             return kl_loss.sum()
         else:
-            return kl_loss.sum() / m_p.shape[0]
+            return kl_loss.mean(dim=0).sum()
