@@ -59,5 +59,6 @@ def audio_synthesizer(mel: np.ndarray, pitch: np.ndarray, save_path: str,
     # Check again
     normed_audio[torch.isnan(normed_audio)] = 0
     # save the wave file
-    sf.write(os.path.join(save_path, file_name + '.wav'), normed_audio, samplerate=sr)
+    sf.write(os.path.join(save_path, file_name + '.wav'), normed_audio,
+             samplerate=sr)
     return normed_audio

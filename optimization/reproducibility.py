@@ -6,8 +6,9 @@ import os
 def fix_seed(seed: int):
     """
     Fix seed for package NUMPY, and TORCH.
-    Do not fix RANDOM seed here, in case the random used for search hyperparameters.
-    
+    Do not fix RANDOM seed here, in case the random used to search
+    hyperparameters.
+
     Parameters
     ----------
     seed: int

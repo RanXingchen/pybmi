@@ -44,7 +44,7 @@ default_hyperparams = {
     # Beta values for ADAM optimizer.
     'betas':                        (0.9, 0.999),
     # Scaling factor for regularizing l2 norm of generator hidden weights.
-    'l2_g_scale':                   500,
+    'l2_g_scale':                   0.0,
     # Scaling factor for regularizing l2 norm of controller hidden weights.
     'l2_c_scale':                   0.0,
     # Optimization step to start kl_weight increase.

@@ -22,11 +22,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from torch import Tensor
-from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 
 from .lfads_defaultparams import default_hyperparams
-from .lfads_utils import plot_traces, plot_factors
+from .lfads_utils import plot_traces, plot_factors, plot_rsquared, plot_umean
+from .lfads_utils import LFADS_Writer
 
 
 def weights_init(m: nn.Module):
@@ -54,7 +54,7 @@ class LFADS(nn.Module):
     using sequential auto-encoders,” Nature Methods, vol. 15, no. 10,
     pp. 805-815, Oct. 2018, doi: 10.1038/s41592-018-0109-9.
     """
-    def __init__(self, N, ncomponents, dt, model_hyperparams=None,
+    def __init__(self, N, ncomponents, dt, hyperparams=None,
                  run_name=''):
         """
         Create an LFADS model.
@@ -63,8 +63,6 @@ class LFADS(nn.Module):
         ----------
         N : int
             The feature dimensionality of the data.
-        T : int
-            Number of time bins of the data.
         ncomponents : int
             Dimensionality of the latent factors.
         dt : float
@@ -72,7 +70,7 @@ class LFADS(nn.Module):
         hyperparameters : dict, optional
             The dictionary of model hyperparameters.
         """
-        # call the nn.Modules constructor
+        # Call the nn.Modules constructor
         super(LFADS, self).__init__()
 
         self.N = N
@@ -80,36 +78,36 @@ class LFADS(nn.Module):
         self.dt = dt
         self.run_name = run_name
         # Get the hyperparameters
-        self._update_hyperparams(default_hyperparams, model_hyperparams)
+        self._update_hyperparams(default_hyperparams, hyperparams)
 
         # -----------------------
         # NETWORK LAYERS INIT
         # -----------------------
 
-        # BiRNN Encoder for Generator
-        self.encoder_g = nn.GRU(self.N, self.enc_g_dim, bidirectional=True,
-                                batch_first=True)
+        # Encoder for generator
+        self.encoder_gf = nn.GRUCell(self.N, self.enc_g_dim)
+        self.encoder_gb = nn.GRUCell(self.N, self.enc_g_dim)
         # FC layer to estimate posterior of g0.
-        self.fc_g0 = nn.Linear(2 * self.enc_g_dim, self.g_dim * 2)
-        # BiRNN Encoder for Controller
+        self.fc_g0mean = nn.Linear(2 * self.enc_g_dim, self.g_dim)
+        self.fc_g0logv = nn.Linear(2 * self.enc_g_dim, self.g_dim)
+
         if self.enc_c_dim > 0:
-            self.encoder_c = nn.GRU(self.N, self.enc_c_dim, bidirectional=True,
-                                    batch_first=True)
-        # Controller
-        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
-            self.controller = nn.GRUCell(self.enc_c_dim * 2 + self.f_dim,
-                                         self.c_dim)
-            self.fc_u = nn.Linear(self.c_dim, self.u_dim * 2)
-        # Generator
+            # Encoder for controller
+            self.encoder_cf = nn.GRUCell(self.N, self.enc_c_dim)
+            self.encoder_cb = nn.GRUCell(self.N, self.enc_c_dim)
+            # Controller
+            if self.c_dim > 0:
+                self.controller = nn.GRUCell(
+                    self.enc_c_dim * 2 + self.f_dim, self.c_dim
+                )
+                # Linear mapping to infer the posterior of gen's input
+                self.fc_umean = nn.Linear(self.c_dim, self.u_dim)
+                self.fc_ulogv = nn.Linear(self.c_dim, self.u_dim)
+
+        # Generator. Note 'u_dim' must greater than 0.
         self.generator = nn.GRUCell(self.u_dim, self.g_dim)
 
-        # FC layers computig mean and log-variance of the posterior
-        # distribution for the generator initial conditions (g0 from
-        # encoder_g) or the inferred inputs (c from controller).
-        # These layers takes input:
-        #  - the forward encoder for g/c at time t (h_enc[t])
-        #  - the backward encoder for g/c at time 1 (h_enc[1]]
-        # Factors from generator output.
+        # Factors from generator output
         self.fc_factors = nn.Linear(self.g_dim, self.f_dim)
         # Estimate logrates from factors.
         self.fc_logrates = nn.Linear(self.f_dim, self.N)
@@ -135,7 +133,7 @@ class LFADS(nn.Module):
             'logv': nn.Parameter(one_g * np.log(self.kappa))
         }
         one_u = torch.ones((self.u_dim,), device='cuda')
-        self.u_prior_gp = {
+        self.u_prior = {
             'mean': nn.Parameter(one_u * 0.0),
             'logv': nn.Parameter(one_u * np.log(self.kappa)),
             'logt': nn.Parameter(one_u * np.log(10))
@@ -144,18 +142,28 @@ class LFADS(nn.Module):
         # --------------------------
         # Useful training variables INIT
         # --------------------------
+        self.current_epoch = 0
+        self.current_step = 0
         self.loss_dict = {
-            'train': [], 'train_rec': [], 'train_kl': [], 'train_l2': [],
-            'valid': [], 'valid_rec': [], 'valid_kl': []
+            'train': [], 'train_rec': [], 'train_kl': [],
+            'valid': [], 'valid_rec': [], 'valid_kl': [],
+            'l2': []
         }
         self.last_decay_epoch = 0
         self.best = float('inf')
-        # Define the optimizer
+
+        # --------------------------
+        # Optimizing stuff
+        # --------------------------
         self.optimizer = torch.optim.Adam(
             self.parameters(), lr=self.lr, eps=self.epsilon, betas=self.betas
         )
+        self.gkl_criterion = bmi.optimization.loss.GaussianKLDivLoss('sum')
+        self.rec_criteria = nn.PoissonNLLLoss(
+            log_input=False, full=True, reduction='sum'
+        )
 
-    def encode(self, x: Tensor, h: tuple):
+    def encode(self, x: Tensor, h: tuple, iPad: Tensor = None):
         """
         Function to encode the data with the forward and backward encoders.
 
@@ -169,125 +177,154 @@ class LFADS(nn.Module):
             Shape [2, Batch size, encoder_g/c dim], where the 0 is the forward
             and 1 is the backward.
         """
-        # Resets parameter data pointer so that they can use faster code paths.
-        self.encoder_g.flatten_parameters()
-        if self.enc_c_dim > 0:
-            self.encoder_c.flatten_parameters()
-
+        B, T, _ = x.shape
         # Get initial hidden state of h_enc_g and h_enc_c
         h_enc_g, h_enc_c = h
+        # Initialize out_enc_g
+        o_enc_c = torch.zeros((2, B, T + 1, self.enc_c_dim), device=x.device)
 
         # Dropout some data
         x = self.drop(x)
-        # Run bidirectional RNN over data
-        _, h_enc_g = self.encoder_g(x, h_enc_g.contiguous())
-        h_enc_g = self.drop(h_enc_g.clamp(-self.clip_val, self.clip_val))
+        # Encode data into forward and backward generator encoders to
+        # produce h_enc_g for generator initial conditions.
+        for t in range(1, x.shape[1] + 1):
+            # Run bidirectional generator encoder RNN over data
+            h_enc_g[0] = self.encoder_gf(x[:, t - 1], h_enc_g[0].clone())
+            h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
+            # Clip the min and max value of h_enc_g
+            h_enc_g = self.drop(h_enc_g.clamp(-self.clip_val, self.clip_val))
+
+            # Run bidirectional controller encoder
+            h_enc_c[0] = self.encoder_cf(x[:, t - 1], h_enc_c[0].clone())
+            h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
+            # Clip the min and max value of h_enc_c
+            h_enc_c = self.drop(h_enc_c.clamp(-self.clip_val, self.clip_val))
+            # Save current hidden state to output.
+            o_enc_c[0, :, t] = h_enc_c[0]
+            o_enc_c[1, :, -(t + 1)] = h_enc_c[1]
+
         # Concatenate forward/backward hidden state for generator.
         h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=-1)
+        o_enc_c = torch.cat((o_enc_c[0, :, 1:], o_enc_c[1, :, :-1]), dim=-1)
 
         # Estimating g0 posterior distribution
-        g0_mean, g0_logv = torch.split(self.fc_g0(h_enc_g), self.g_dim, dim=-1)
-        g0_posterior = {'mean': g0_mean, 'logv': g0_logv}
+        g0_mean = self.fc_g0mean(h_enc_g)
+        g0_logv = self.fc_g0logv(h_enc_g)
+        # Sample initial conditions of generator from posterior distribution
+        g0 = self._sample_gaussian(g0_mean, g0_logv)
 
-        # Get output of encoder for controller if exist.
-        if self.enc_c_dim > 0:
-            out_enc_c, _ = self.encoder_c(x, h_enc_c.contiguous())
-            out_enc_c = out_enc_c.clamp(-self.clip_val, self.clip_val)
-            return g0_posterior, out_enc_c
-        else:
-            return g0_posterior, None
+        # KL cost for g(0)
+        self.kl_loss = self.gkl_criterion(
+            self.g0_prior['mean'], self.g0_prior['logv'], g0_mean, g0_logv
+        ) / x.shape[0]
+        return g0, o_enc_c
 
-    def generate(self, g: Tensor, out_enc_c: Tensor, h_c: Tensor):
+    def generate(self, g: Tensor, o_enc_c: Tensor, h_c: Tensor,
+                 iPad: Tensor = None):
         """
         Generates the rates using the controller encoder outputs and the
         sampled initial conditions (g0).
+
+        Parameters
+        ----------
+        g : Tensor
+            Initial condition of generator.
+        o_enc_c : Tensor
+            output of controller encoder.
+        h_c : Tensor
+            Hidden state of controller.
         """
         device = g.device
-        T = out_enc_c.shape[1]
+        B, T, _ = o_enc_c.shape
 
         # Prepare the sequence container.
-        factors = torch.zeros(g.shape[0], T, self.f_dim).to(device)
-        gen_inp = torch.zeros(g.shape[0], T, self.u_dim).to(device)
+        factors = torch.zeros(B, T, self.f_dim).to(device)
+        gen_inp = torch.zeros(B, T, self.u_dim).to(device)
         u_posterior = {
-            'mean': torch.zeros(g.shape[0], T, self.u_dim).to(device),
-            'logv': torch.zeros(g.shape[0], T, self.u_dim).to(device)
+            'mean': torch.zeros(B, T, self.u_dim).to(device),
+            'logv': torch.zeros(B, T, self.u_dim).to(device)
         }
 
         # Initialize factors by g0.
         f = self.fc_factors(self.drop(g))
         for t in range(T):
-            # Concatenate h_enc_cf and h_enc_cb outputs at time t with factors
-            # at time t - 1 as input to controller.
-            out_enc_c_with_f = torch.cat((out_enc_c[:, t], f), dim=-1)
+            # When input data include padding value, check if current
+            # step are all consist of paddings.
+            real_batch_size = (~iPad[:, t]).float().sum()
+            if real_batch_size == 0:
+                # All data is padding, break the loop.
+                break
+            # Concatenate o_enc_c at time t with factors at time t - 1 as
+            # input to controller.
+            o_enc_c_with_f = torch.cat((o_enc_c[:, t], f), dim=-1)
             # Update controller with controller encoder outputs
-            h_c = self.controller(self.drop(out_enc_c_with_f), h_c)
+            h_c = self.controller(self.drop(o_enc_c_with_f), h_c)
             h_c = torch.clamp(h_c, min=-self.clip_val, max=self.clip_val)
             # Calculate posterior distribution parameters for inferred inputs
             # from controller state
-            u_posterior['mean'][:, t], u_posterior['logv'][:, t] = \
-                torch.split(self.fc_u(h_c), self.u_dim, dim=-1)
+            u_posterior['mean'][:, t] = self.fc_umean(h_c)
+            u_posterior['logv'][:, t] = self.fc_ulogv(h_c)
             # Sample inputs for generator from u(t) posterior distribution
-            u = torch.randn(g.shape[0], self.u_dim).to(device) * \
-                torch.exp(0.5 * u_posterior['logv'][:, t]) + \
-                u_posterior['mean'][:, t]
+            u = self._sample_gaussian(u_posterior['mean'][:, t],
+                                      u_posterior['logv'][:, t])
             gen_inp[:, t] = u
+
+            # KL cost for u(t)
+            self.kl_loss = self.kl_loss + self.gkl_criterion(
+                self.u_prior['mean'], self.u_prior['logv'],
+                u_posterior['mean'][:, t][~iPad[:, t]],
+                u_posterior['logv'][:, t][~iPad[:, t]]
+            ) / real_batch_size
+
             # Update generator
             g = self.generator(u, g)
             g = torch.clamp(g, -self.clip_val, self.clip_val)
             # Generate factors from generator state
             f = self.fc_factors(self.drop(g))
             factors[:, t] = f
-        return u_posterior, factors, gen_inp
+        # END of running time stamp.
 
-    def forward(self, x: Tensor):
+        return factors, gen_inp, u_posterior
+
+    def forward(self, x: Tensor, iPad: Tensor = None):
         """
         Runs a forward pass through the network.
 
         Parameters
         ----------
         x : Tensor
-            Single-trial spike data. shape [batch size, time-steps, input dim]
+            Single-trial spike data. shape [batch size, time steps, input dim]
         """
         B, _, N = x.shape
 
         assert N == self.N, "The input features should be same with N."
+        # Update batch size incase the last batch in dataset not enough.
+        self.batch_size = B
 
-        # 1. Initialize hidden state of encoder for generator and Controller.
+        # 1.1 Initialize hidden state of encoder for gen and con.
         h_enc_g = self._init_hidden_state((B, self.enc_g_dim), True, x.device)
         h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True, x.device)
-        # 2. Encode the input data for generator and controller respectively.
-        g0_posterior, out_enc_c = self.encode(x, (h_enc_g, h_enc_c))
-        # 3. Sample initial conditions for generator from posterior
-        g0 = torch.randn(B, self.g_dim).to(x.device) * \
-            (0.5 * g0_posterior['logv']).exp() + g0_posterior['mean']
+        # 1.2 Encode the input data for generator and controller respectively.
+        g0, o_enc_c = self.encode(x, (h_enc_g, h_enc_c), iPad)
 
-        # Initialize hidden state for controller.
+        # 2.1 Initialize hidden state for controller.
         h_c = self._init_hidden_state((B, self.c_dim), device=x.device)
-        # 4. Generate factors and rates.
-        u_posterior, factors, inp_g = self.generate(g0, out_enc_c, h_c)
-        # Instantiate AR1 process as mean and variance per time step
-        self.u_prior = self._gp_to_normal(self.u_prior_gp, inp_g)
-
-        # 5. Generate rates from factor state
+        # 2.2. Generate factors and rates.
+        factors, _, u_posterior = self.generate(g0, o_enc_c, h_c, iPad)
+        # 2.3 Generate rates from factor state
         rates = torch.exp(self.fc_logrates(factors))
-        # Generate factors.
-        return g0_posterior, u_posterior, factors, rates
+        return factors, rates, u_posterior['mean']
 
-    def predict(self, dts, pad=None, batch_size=None):
+    def predict(self, dts, l2_loss=0, pad=None, batch_size=None):
         if batch_size is None:
             batch_size = self.batch_size
         # Create dataloader.
         dl = DataLoader(dts, batch_size=batch_size)
 
-        # Define the criteria
-        rec_criteria = nn.PoissonNLLLoss(log_input=False, full=True,
-                                         reduction='sum')
-        gkl_criteria = bmi.optimization.loss.GaussianKLDivLoss(reduction='sum')
-
-        loss, loss_rec, loss_kl = 0, 0, 0
+        vloss, vloss_rec, vloss_kl = 0, 0, 0
 
         # Save factors and rates
-        factors, rates = [], []
+        factors, rates, umean = [], [], []
 
         self.eval()
         for i, batch in enumerate(dl):
@@ -297,58 +334,48 @@ class LFADS(nn.Module):
             # Replace the padding value to 0.
             inp[iPad] = 0
             with torch.no_grad():
-                g0_posterior, u_posterior, f, r = self(inp)
-                factors.append(f)
-                rates.append(r)
+                f, r, u = self(inp, iPad)
 
-            # Loss computation
+            # Save factors of current batch.
+            factors.append(f)
+            rates.append(r)
+            umean.append(u)
 
-            # Gaussian KL Div loss
-            kl_g = gkl_criteria(self.g0_prior['mean'], self.g0_prior['logv'],
-                                g0_posterior['mean'], g0_posterior['logv'])
-            kl_g /= inp.shape[0]
-            kl_c = 0
-            for t in range(inp.shape[1]):
-                real_batch_size = (~iPad[:, t]).float().sum()
-                if real_batch_size == 0:
-                    break
-                kl_c += gkl_criteria(
-                    self.u_prior['mean'][:, t][~iPad[:, t]],
-                    self.u_prior['logv'][:, t][~iPad[:, t]],
-                    u_posterior['mean'][:, t][~iPad[:, t]],
-                    u_posterior['logv'][:, t][~iPad[:, t]]
-                ) / real_batch_size
-            kl_loss = kl_g + kl_c
+            # *Loss computation
+
             # Reconstruction loss
-            rec_loss = rec_criteria(r[~iPad], inp[~iPad]) / inp.shape[0]
+            rec_loss = self.rec_criteria(r[~iPad] * self.dt,
+                                         inp[~iPad]) / inp.shape[0]
             # Sum all the loss
-            all_loss = rec_loss + kl_loss
+            loss = rec_loss + self.kl_loss + l2_loss
 
-            loss += all_loss.item()
-            loss_rec += rec_loss.item()
-            loss_kl += kl_loss.item()
+            vloss += loss.item()
+            vloss_rec += rec_loss.item()
+            vloss_kl += self.kl_loss.item()
         # End of test dataset
 
-        loss /= (i + 1)
-        loss_rec /= (i + 1)
-        loss_kl /= (i + 1)
-
+        # Concatenate all batches factors and rates.
         factors = torch.cat(factors, dim=0)
         rates = torch.cat(rates, dim=0)
-        return factors, rates, loss, loss_rec, loss_kl
+        umean = torch.cat(umean, dim=0)
 
-    def fit(self, train_dts, save_path, valid_dts=None,
-            pad=float('NaN'), use_tensorboard=True):
+        vloss /= (i + 1)
+        vloss_rec /= (i + 1)
+        vloss_kl /= (i + 1)
+        return factors, rates, umean, vloss, vloss_rec, vloss_kl
+
+    def fit(self, t_dts, save_path, v_dts=None, pad=float('NaN'),
+            use_tensorboard=True, valid_truth=None):
         """
         Fits the LFADS using ADAM optimization.
 
         Parameters
         ----------
-        train_dts : TensorDataset
+        t_dts : TensorDataset
             Dataset with the training data to fit LFADS model
         save_path : str
             The root save path for all the results.
-        valid_dts : TensorDataset, optional
+        v_dts : TensorDataset, optional
             Dataset with validation data to validate LFADS model. When
             Validation set is None, no validate conducted, and the model
             trained all epoches. Default: None.
@@ -362,35 +389,30 @@ class LFADS(nn.Module):
             Whether to write results to tensorboard. Default: False.
         """
         # Create the training dataloader
-        t_dl = DataLoader(train_dts, self.batch_size, True, drop_last=True)
-        # Define the criteria
-        rec_criteria = nn.PoissonNLLLoss(log_input=False, full=True,
-                                         reduction='sum')
-        gkl_criteria = bmi.optimization.loss.GaussianKLDivLoss(reduction='sum')
+        t_dl = DataLoader(t_dts, self.batch_size, True)
         # Initialize tensorboard
         if use_tensorboard:
             tb_folder = os.path.join(save_path, self.run_name + 'tensorboard')
             if not os.path.exists(tb_folder):
                 os.mkdir(tb_folder)
-            writer = SummaryWriter(tb_folder)
+            writer = LFADS_Writer(tb_folder)
 
         # Start training LFADS.
-        current_step = 0
         print('\n=========================')
         print('Beginning training LFADS...')
         print('=========================\n')
         # For each epoch ...
-        for epoch in range(self.epoch):
-            # If minimum learning rate reached, break training loop
+        for epoch in range(self.current_epoch, self.epoch):
+            # If minimum learning rate reached, break training loop.
             if self.lr <= self.lr_min:
                 break
-            # cumulative training loss for this epoch
-            tloss, tloss_rec, tloss_kl, tloss_l2 = 0, 0, 0, 0
+            # Cumulative training loss for this epoch.
+            tloss, tloss_rec, tloss_kl = 0, 0, 0
 
-            # for each step...
+            # For each step...
             self.train()
             for i, batch in enumerate(t_dl):
-                current_step += 1
+                self.current_step += 1
                 inp = batch[0]
                 # Find the padding index.
                 iPad = bmi.utils.find_padding_index(inp.sum(dim=-1), pad)
@@ -398,40 +420,22 @@ class LFADS(nn.Module):
                 inp[iPad] = 0
 
                 self.zero_grad()
-                # Forward
-                g0_posterior, u_posterior, t_factors, t_rates = self(inp)
+                # *Forward
+                tf, tr, tu = self(inp, iPad)
 
-                # Loss computation
+                # *Loss computation
 
                 # L2 Loss
                 l2_g = self._gru_hh_l2_loss(self.generator, self.l2_g_scale)
                 l2_c = self._gru_hh_l2_loss(self.controller, self.l2_c_scale)
                 l2_loss = l2_g + l2_c
-                # Gaussian KL Div loss
-                kl_g = gkl_criteria(
-                    self.g0_prior['mean'], self.g0_prior['logv'],
-                    g0_posterior['mean'], g0_posterior['logv']
-                )
-                kl_g /= self.batch_size
-                kl_c = 0
-                for t in range(inp.shape[1]):
-                    real_batch_size = (~iPad[:, t]).float().sum()
-                    if real_batch_size == 0:
-                        break
-                    kl_c += gkl_criteria(
-                        self.u_prior['mean'][:, t][~iPad[:, t]],
-                        self.u_prior['logv'][:, t][~iPad[:, t]],
-                        u_posterior['mean'][:, t][~iPad[:, t]],
-                        u_posterior['logv'][:, t][~iPad[:, t]]
-                    ) / real_batch_size
-                kl_loss = kl_g + kl_c
                 # Reconstruction loss
-                rec_loss = rec_criteria(t_rates[~iPad], inp[~iPad]) /\
-                    inp.shape[0]
+                rec_loss = self.rec_criteria(tr[~iPad] * self.dt,
+                                             inp[~iPad]) / inp.shape[0]
                 # Calculate regularizer weights
-                w_kl, w_l2 = self._weight_scheduler(current_step)
+                w_kl, w_l2 = self._weight_scheduler(self.current_step)
                 # Sum all the loss
-                loss = rec_loss + w_kl * kl_loss + w_l2 * l2_loss
+                loss = rec_loss + w_kl * self.kl_loss + w_l2 * l2_loss
                 # Check if loss is nan
                 assert not torch.isnan(loss.data), 'Loss is NaN!'
                 # Backward
@@ -449,32 +453,30 @@ class LFADS(nn.Module):
                 # Add batch loss to epoch running loss
                 tloss += loss.item()
                 tloss_rec += rec_loss.item()
-                tloss_kl += kl_loss.item()
-                tloss_l2 += l2_loss.item()
+                tloss_kl += self.kl_loss.item()
 
                 if use_tensorboard:
-                    self.health_check(writer, current_step)
+                    writer.check_model(self._modules, self.current_step)
             # End of one epoch training.
 
             tloss /= (i + 1)
             tloss_rec /= (i + 1)
             tloss_kl /= (i + 1)
-            tloss_l2 /= (i + 1)
 
             # Do validation.
-            v_factors, v_rates, vloss, vloss_rec, vloss_kl = \
-                self.predict(valid_dts, pad)
+            vf, vr, vu, vloss, vloss_rec, vloss_kl = \
+                self.predict(v_dts, l2_loss, pad)
             # Print Epoch Loss
-            print('Epoch: %4d, Step: %5d, train loss: %.3f, '
-                  'valid loss: %.3f' % (epoch + 1, current_step, tloss, vloss))
+            print('Epoch: %4d, Step: %5d, train loss: %.3f, valid loss: %.3f'
+                  % (epoch + 1, self.current_step, tloss, vloss))
             # Store loss
             self.loss_dict['train'].append(tloss)
             self.loss_dict['train_rec'].append(tloss_rec)
             self.loss_dict['train_kl'].append(tloss_kl)
-            self.loss_dict['train_l2'].append(tloss_l2)
             self.loss_dict['valid'].append(vloss)
             self.loss_dict['valid_rec'].append(vloss_rec)
             self.loss_dict['valid_kl'].append(vloss_kl)
+            self.loss_dict['l2'].append(l2_loss.item())
 
             # Apply learning rate decay function
             if self.scheduler_on:
@@ -482,97 +484,89 @@ class LFADS(nn.Module):
 
             # Write results to tensorboard
             if use_tensorboard:
-                writer.add_scalars('1_Loss/1_Total_Loss',
-                                   {'Train': tloss, 'Valid': vloss},
-                                   epoch)
-                writer.add_scalars('1_Loss/2_Reconstruction_Loss',
-                                   {'Train':  tloss_rec, 'Valid': vloss_rec},
-                                   epoch)
-                writer.add_scalars('1_Loss/3_KL_Loss',
-                                   {'Train': tloss_kl, 'Valid': vloss_kl},
-                                   epoch)
-                writer.add_scalar('1_Loss/4_L2_loss', tloss_l2, epoch)
-
-                writer.add_scalar('2_Optimizer/1_Learning_Rate',
-                                  self.lr, epoch)
-                writer.add_scalar('2_Optimizer/2_KL_weight', w_kl, epoch)
-                writer.add_scalar('2_Optimizer/3_L2_weight', w_l2, epoch)
+                writer.write_loss(self.loss_dict, epoch)
+                writer.write_opt_params(self.lr, w_kl, w_l2, epoch)
 
             # Save model checkpoint if training error hits a new low and
             # kl and l2 loss weight schedule has completed.
             nkl = self.w_kl_start + self.w_kl_dur
             nl2 = self.w_l2_start + self.w_l2_dur
-            if current_step >= max(nkl, nl2):
+            if self.current_step >= max(nkl, nl2):
                 if self.loss_dict['valid'][-1] < self.best:
                     self.best = self.loss_dict['valid'][-1]
                     # saving checkpoint
-                    self.save_checkpoint(save_path, epoch + 1)
+                    self.save_checkpoint(save_path)
 
                     if use_tensorboard:
+                        idx = np.random.randint(inp.shape[0])
                         tfigs_dict = self.plot_summary(
-                            inp[-1, ~iPad[-1]], t_rates[-1, ~iPad[-1]],
-                            t_factors[-1, ~iPad[-1]]
+                            inp[idx, ~iPad[idx]], tr[idx, ~iPad[idx]],
+                            tf[idx, ~iPad[idx]], tu[idx, ~iPad[idx]]
                         )
-                        writer.add_figure(
-                            'Examples/1_Train', tfigs_dict['traces'], epoch
-                        )
-                        writer.add_figure(
-                            'Factors/1_Train', tfigs_dict['factors'], epoch
-                        )
+                        writer.plot_examples(tfigs_dict, epoch, '1_Train')
 
                         # Get the valid data padding index.
-                        v_inp = valid_dts.tensors[0]
+                        v_inp = v_dts.tensors[0]
                         v_iPad = bmi.utils.find_padding_index(
                             v_inp.sum(dim=-1), pad
                         )
+                        idx = np.random.randint(vf.shape[0])
                         vfigs_dict = self.plot_summary(
-                            v_inp[-1, ~v_iPad[-1]], v_rates[-1, ~v_iPad[-1]],
-                            v_factors[-1, ~v_iPad[-1]]
+                            v_inp[idx, ~v_iPad[idx]], vr[idx, ~v_iPad[idx]],
+                            vf[idx, ~v_iPad[idx]], vu[idx, ~v_iPad[idx]],
+                            truth=valid_truth[idx]
                         )
-                        writer.add_figure(
-                            'Examples/2_Valid', vfigs_dict['traces'], epoch
-                        )
-                        writer.add_figure(
-                            'Factors/2_Valid', vfigs_dict['factors'], epoch
-                        )
+                        writer.plot_examples(vfigs_dict, epoch, '2_Valid')
+            self.current_epoch += 1
         # End of all epochs
 
         if use_tensorboard:
             writer.close()
 
-        # Save the all loss to csv file.
         df = pd.DataFrame(self.loss_dict)
         df.to_csv(os.path.join(save_path, self.run_name + 'loss.csv'),
                   index_label='epoch')
         # Save a final checkpoint
-        self.save_checkpoint(save_path, self.epoch)
+        self.save_checkpoint(save_path)
 
         # Print message
         print('...training complete.')
 
-    def plot_summary(self, true, pred, factors):
+    def plot_summary(self, true, pred, factors, umean, truth=None):
         plt.close()
         figs_dict = {}
 
         true = true.detach().cpu().numpy()
         pred = pred.detach().cpu().numpy()
         factors = factors.detach().cpu().numpy()
+        umean = umean.detach().cpu().numpy()
 
         figs_dict['traces'] = plot_traces(
             pred, true, self.dt, mode='activity', norm=False
         )
+        figs_dict['traces'].suptitle('Spiking Data vs.Inferred Rate')
+        figs_dict['traces'].legend(['Inferred Rates', 'Spikes'])
+
         figs_dict['factors'] = plot_factors(factors, self.dt)
+
+        if torch.is_tensor(truth):
+            truth = truth.detach().cpu().numpy()
+            figs_dict['truth'] = plot_traces(pred, truth, self.dt, mode='rand')
+            figs_dict['truth'].suptitle('Inferred vs. Ground-truth rates')
+            figs_dict['truth'].legend(['Inferred', 'Ground-truth'])
+            figs_dict['r2'] = plot_rsquared(pred, truth)
+
+        figs_dict['inputs'] = plot_umean(umean, self.dt)
         return figs_dict
 
-    def save_checkpoint(self, save_path, epoch):
+    def save_checkpoint(self, save_path):
         """
         Save checkpoint of network parameters and optimizer state.
 
         Parameters
         ----------
-        purge_limit : int, optional
-            Delete previous checkpoint if there have been fewer
-            epochs than this limit before saving again.
+        save_path : str
+            The path used to save the model.
 
         Notes
         -----
@@ -588,21 +582,24 @@ class LFADS(nn.Module):
         # Get current time in YYMMDDhhmm format
         timestamp = datetime.datetime.now().strftime('%y%m%d%H%M')
         # Get epoch_num as string
-        epoch = str(epoch)
+        epoch = str(self.current_epoch)
         # Get training_error as string
         loss = str(self.loss_dict['valid'][-1]).replace('.', '-')
 
         model_filename = '%s_epoch_%s_loss_%s.pth' % (timestamp, epoch, loss)
 
         # Create dictionary of training variables
-        hps_dict = {
+        train_dict = {
             'best': self.best, 'loss_dict': self.loss_dict,
-            'last_decay_epoch': self.last_decay_epoch, 'lr': self.lr
+            'current_epoch': self.current_epoch,
+            'current_step': self.current_step,
+            'last_decay_epoch': self.last_decay_epoch,
+            'lr': self.lr
         }
         # Save network parameters, optimizer state, and training variables
         torch.save(
             {'net': self.state_dict(), 'opt': self.optimizer.state_dict(),
-             'hps': hps_dict},
+             'train': train_dict},
             os.path.join(model_savepath, model_filename)
         )
 
@@ -612,6 +609,8 @@ class LFADS(nn.Module):
 
         Parameters
         ----------
+        loadpath : str
+            The path where store the model .pth file.
         mode : str, optional
             Path to input file, must have '.pth' extension. It can
             be one of 'best', 'recent', or 'longest'.
@@ -623,149 +622,72 @@ class LFADS(nn.Module):
         mode = bmi.utils.check_params(
             mode, ['best', 'recent', 'longest'], 'mode'
         )
-        model_loadpath = os.path.join(loadpath, 'models')
 
-        # Get checkpoint filenames
-        try:
-            _, _, filenames = list(os.walk(model_loadpath))[0]
-        except IndexError:
-            return
-        assert len(filenames) > 0, 'No model files under ' + model_loadpath
+        # If loadpath is not a filename, get checkpoint with specified
+        # quality (best, recent, longest).
+        if not os.path.isfile(loadpath):
+            # The path of model folder.
+            model_loadpath = os.path.join(loadpath, self.run_name + 'models')
+            # Get checkpoint filenames
+            try:
+                _, _, filenames = list(os.walk(model_loadpath))[0]
+            except IndexError:
+                return
+            assert len(filenames) > 0, 'No models under ' + model_loadpath
 
-        # Sort in ascending order
-        filenames.sort()
-        # Split filenames into attributes (date, epoch, loss)
-        split_filenames = [os.path.splitext(f)[0].split('_')
-                           for f in filenames]
-        dates = [att[0] for att in split_filenames]
-        epochs = [att[2] for att in split_filenames]
-        losses = [att[-1] for att in split_filenames]
+            # Sort in ascending order
+            filenames.sort()
+            # Split filenames into attributes (date, epoch, loss)
+            split_filenames = [os.path.splitext(f)[0].split('_')
+                               for f in filenames]
+            dates = [att[0] for att in split_filenames]
+            epochs = [att[2] for att in split_filenames]
+            losses = [att[-1] for att in split_filenames]
 
-        if mode == 'best':
-            # Get filename with lowest loss.
-            # If conflict, take most recent of subset.
-            losses.sort()
-            best = losses[0]
-            filename = [f for f in filenames if best in f][-1]
-        elif mode == 'recent':
-            # Get filename with most recent timestamp.
-            # If conflict, take first one
-            dates.sort()
-            recent = dates[-1]
-            filename = [f for f in filenames if recent in f][0]
+            if mode == 'best':
+                # Get filename with lowest loss.
+                # If conflict, take most recent of subset.
+                losses.sort()
+                best = losses[0]
+                filename = [f for f in filenames if best in f][-1]
+            elif mode == 'recent':
+                # Get filename with most recent timestamp.
+                # If conflict, take first one
+                dates.sort()
+                recent = dates[-1]
+                filename = [f for f in filenames if recent in f][0]
+            else:
+                # Get filename with most number of epochs run.
+                # If conflict, take most recent of subset.
+                epochs.sort()
+                longest = epochs[-1]
+                filename = [f for f in filenames if longest in f][-1]
+            # Get the full path filename
+            filename = os.path.join(model_loadpath, filename)
         else:
-            # Get filename with most number of epochs run.
-            # If conflict, take most recent of subset.
-            epochs.sort()
-            longest = epochs[-1]
-            filename = [f for f in filenames if longest in f][-1]
+            filename = loadpath
+        # END OF loadpath IS FOLDER.
 
         assert os.path.splitext(filename)[1] == '.pth', \
             'Input filename must have .pth extension'
 
         # Load the specific checkpoint
-        state = torch.load(os.path.join(model_loadpath, filename))
+        state = torch.load(filename)
         # Set network parameters
         self.load_state_dict(state['net'])
         # Set optimizer state
         self.optimizer.load_state_dict(state['opt'])
-
         # Set training variables
-        self.best = state['hps']['best']
-        self.loss_dict = state['hps']['loss_dict']
-        self.last_decay_epoch = state['hps']['last_decay_epoch']
-        self.lr = state['hps']['lr']
+        self.best = state['train']['best']
+        self.loss_dict = state['train']['loss_dict']
+        self.current_epoch = state['train']['current_epoch']
+        self.current_step = state['train']['current_step']
+        self.last_decay_epoch = state['train']['last_decay_epoch']
+        self.lr = state['train']['lr']
 
-    def health_check(self, writer, current_step):
-        """
-        Checks the gradient norms for each parameter, what the maximum weight
-        is in each weight matrix, and whether any weights have reached NaN.
-
-        Report norm of each weight matrix
-        Report norm of each layer activity
-        Report norm of each Jacobian
-
-        To report by batch. Look at data that is inducing the blow-ups.
-
-        Create a -Nan report. What went wrong? Create file that shows data
-        that preceded blow up,  and norm changes over epochs.
-
-        Notes
-        -----
-        Theory 1: sparse activity in real data too difficult to encode
-            - maybe, but not fixed by augmentation
-
-        Theory 2: Edgeworth approximation ruining everything
-            - probably: when switching to order=2 loss does not blow up,
-            but validation error is huge
-        """
-        odict = self._modules
-
-        for i, name in enumerate(odict.keys()):
-            if 'gru' in name:
-                writer.add_scalar(
-                    '3_Weight_norms/%ia_%s_ih' % (i, name),
-                    odict.get(name).weight_ih.data.norm(), current_step
-                )
-                writer.add_scalar(
-                    '3_Weight_norms/%ib_%s_hh' % (i, name),
-                    odict.get(name).weight_hh.data.norm(), current_step
-                )
-
-                if current_step > 1:
-                    writer.add_scalar(
-                        '4_Gradient_norms/%ia_%s_ih' % (i, name),
-                        odict.get(name).weight_ih.grad.data.norm(),
-                        current_step
-                    )
-                    writer.add_scalar(
-                        '4_Gradient_norms/%ib_%s_hh' % (i, name),
-                        odict.get(name).weight_hh.grad.data.norm(),
-                        current_step
-                    )
-            elif 'fc' in name or 'conv' in name:
-                writer.add_scalar(
-                    '3_Weight_norms/%i_%s' % (i, name),
-                    odict.get(name).weight.data.norm(), current_step
-                )
-                if current_step > 1:
-                    writer.add_scalar(
-                        '4_Gradient_norms/%i_%s' % (i, name),
-                        odict.get(name).weight.grad.data.norm(), current_step
-                    )
-
-    def _gp_to_normal(self, prior, process):
-        '''
-        Convert gaussian process with given process mean, process log-variance,
-        process tau, and realized process to mean and log-variance of diagonal
-        Gaussian for each time-step
-        '''
-        gp_mean, gp_logv, gp_logt = prior['mean'], prior['logv'], prior['logt']
-        device = gp_mean.device
-        shape = (1, process.shape[0], process.shape[-1])
-
-        tau = torch.exp(-1 / gp_logt.exp())
-
-        mean = gp_mean * torch.ones(shape).to(device)   # (1, B, F)
-        m = gp_mean + (process[:, :-1].permute(1, 0, 2) - gp_mean) * tau
-        mean = torch.cat((mean, m))
-
-        logv = gp_logv * torch.ones(shape).to(device)
-        v = gp_logv * torch.ones(process.shape, device=device)[:, :-1].\
-            permute(1, 0, 2)
-        logv = torch.cat((logv, torch.log(1 - tau.pow(2)) + v))
-
-        _prior = {}
-        _prior['mean'] = mean.permute(1, 0, 2)
-        _prior['logv'] = logv.permute(1, 0, 2)
-        return _prior
-
-    def _set_params(self, params: dict):
-        """
-        Register the paramters to the class.
-        """
-        for key, val in params.items():
-            self.__setattr__(key, val)
+    def _set_params(self, params):
+        for k in params.keys():
+            self.__setattr__(k, params[k])
 
     def _update_hyperparams(self, pre_parm: dict, new_parm: dict):
         """
@@ -796,12 +718,41 @@ class LFADS(nn.Module):
         l2_weight = min(n_l2 / self.w_l2_dur, 1.0)
         return kl_weight, l2_weight
 
+    def _init_hidden_state(self, shape, bidirectional=False, device='cpu'):
+        """
+        Initialize the hidden state for GRU Cells.
+        """
+        hf = torch.zeros(shape)
+        if bidirectional:
+            # Add backward hidden state.
+            hb = torch.zeros(shape)
+            h = torch.stack([hf, hb], dim=0).to(device)
+        else:
+            h = hf.to(device)
+        return h
+
+    def _sample_gaussian(self, mean: torch.Tensor, logv: torch.Tensor):
+        """
+        Sample from a diagonal gaussian with given mean and log-variance.
+
+        Parameters
+        ----------
+        mean : torch.Tensor
+            Mean of diagional gaussian
+        logv : torch.Tensor
+            Log-variance of diagonal gaussian
+        """
+        # Generate noise from standard gaussian.
+        eps = torch.randn(mean.shape, dtype=mean.dtype).to(mean.device)
+        # Scale and shift by mean and standard deviation
+        return eps * (logv * 0.5).exp() + mean
+
     def _apply_decay(self, epoch):
         """
-        Decrease the learning rate by a defined factor(learning_rate_decay).
-        If loss is greater than the loss in the last six training steps and
-        if the loss has not decreased in the last six training steps.
-        See bullet point 8 of section 1.9 in online methods.
+        Decrease the learning rate by a defined factor(lr_decay).
+        If loss is greater than the loss in the last 'patience' training
+        steps and if the loss has not decreased in the last 'cooldown'
+        training steps. See bullet point 8 of section 1.9 in online methods.
         """
         N = self.scheduler_patience
         C = self.scheduler_cooldown
@@ -809,9 +760,10 @@ class LFADS(nn.Module):
         # index -1 in loss_dict is current loss.
         loss = self.loss_dict['train'][-1]
 
-        if len(self.loss_dict['train']) >= N:
-            if all(loss > torch.tensor(self.loss_dict['train'][-N:-1])):
-                # When current loss is not decreased in last N epoch.
+        # There is N + 1 because the last one is current loss.
+        if len(self.loss_dict['train']) >= N + 1:
+            if all(loss > torch.tensor(self.loss_dict['train'][-(N + 1):-1])):
+                # When current loss is not decreased in last C epoch.
                 if epoch >= self.last_decay_epoch + C:
                     # To apply decay, current step must greater than last
                     # step plus scheduler cooldown.
@@ -822,21 +774,6 @@ class LFADS(nn.Module):
                     self.last_decay_epoch = epoch
 
                     print('\n\tLearning rate decreased to %.8f' % self.lr)
-
-    def _get_prior_stats(self, shape, mu, logk, device):
-        _mean = torch.ones(shape, device=device) * mu
-        _logvar = torch.ones(shape, device=device) * logk
-        prior = {'mean': _mean, 'logvar': _logvar}
-        return prior
-
-    def _init_hidden_state(self, shape, bidirectional=False, device='cpu'):
-        hf = torch.zeros(shape)
-        if bidirectional:
-            hb = torch.zeros(shape)
-            h = torch.stack([hf, hb], dim=0).to(device)
-        else:
-            h = hf.to(device)
-        return h
 
     def _gru_hh_l2_loss(self, gru: nn.GRUCell, scale: float):
         loss = scale * gru.weight_hh.norm(2) / gru.weight_hh.numel()
