@@ -46,7 +46,7 @@ def plot_traces(pred: ndarray, true: ndarray, bin_size, figsize=(8, 8),
         idxs = np.random.choice(list(range(N)), num_traces, False)
         idxs.sort()
     elif mode == 'activity':
-        idxs = true.max(axis=0).argsort()[-num_traces:]
+        idxs = np.abs(true).max(axis=0).argsort()[-num_traces:]
     else:
         idxs = list(range(num_traces))
 

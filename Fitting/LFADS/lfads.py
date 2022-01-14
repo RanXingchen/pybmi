@@ -180,29 +180,46 @@ class LFADS(nn.Module):
         B, T, _ = x.shape
         # Get initial hidden state of h_enc_g and h_enc_c
         h_enc_g, h_enc_c = h
-        # Initialize out_enc_g
+        # Initialize out_enc_g and out_enc_c
+        o_enc_g = torch.zeros((2, B, T + 1, self.enc_g_dim), device=x.device)
         o_enc_c = torch.zeros((2, B, T + 1, self.enc_c_dim), device=x.device)
+
+        # Get batch padding information.
+        batch_info = (~iPad).int().sum(dim=0)
+        featu_info = (~iPad).int().sum(dim=1)
 
         # Dropout some data
         x = self.drop(x)
         # Encode data into forward and backward generator encoders to
         # produce h_enc_g for generator initial conditions.
         for t in range(1, x.shape[1] + 1):
-            # Run bidirectional generator encoder RNN over data
+            # Run FORWARD generator encoder RNN over data
             h_enc_g[0] = self.encoder_gf(x[:, t - 1], h_enc_g[0].clone())
-            h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
+            # Unless this batch have at least one value is not padding value,
+            # never start BACKWARD running.
+            if batch_info[-t] != 0:
+                h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
             # Clip the min and max value of h_enc_g
             h_enc_g = self.drop(h_enc_g.clamp(-self.clip_val, self.clip_val))
+            # Save current hidden state to output.
+            o_enc_g[0, :, t] = h_enc_g[0]
+            o_enc_g[1, :, -(t + 1)] = h_enc_g[1]
 
-            # Run bidirectional controller encoder
+            # Run FORWARD controller encoder
             h_enc_c[0] = self.encoder_cf(x[:, t - 1], h_enc_c[0].clone())
-            h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
+            # Unless this batch have at least one value is not padding value,
+            # never start BACKWARD running.
+            if batch_info[-t] != 0:
+                h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
             # Clip the min and max value of h_enc_c
             h_enc_c = self.drop(h_enc_c.clamp(-self.clip_val, self.clip_val))
             # Save current hidden state to output.
             o_enc_c[0, :, t] = h_enc_c[0]
             o_enc_c[1, :, -(t + 1)] = h_enc_c[1]
 
+        # Get the real last state of FORWARD encoder_g
+        for i, n in enumerate(featu_info):
+            h_enc_g[0, i] = o_enc_g[0, i, n]
         # Concatenate forward/backward hidden state for generator.
         h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=-1)
         o_enc_c = torch.cat((o_enc_c[0, :, 1:], o_enc_c[1, :, :-1]), dim=-1)
@@ -245,13 +262,15 @@ class LFADS(nn.Module):
             'logv': torch.zeros(B, T, self.u_dim).to(device)
         }
 
+        # Get batch padding information.
+        batch_info = (~iPad).int().sum(dim=0)
+
         # Initialize factors by g0.
         f = self.fc_factors(self.drop(g))
         for t in range(T):
             # When input data include padding value, check if current
             # step are all consist of paddings.
-            real_batch_size = (~iPad[:, t]).float().sum()
-            if real_batch_size == 0:
+            if batch_info[t] == 0:
                 # All data is padding, break the loop.
                 break
             # Concatenate o_enc_c at time t with factors at time t - 1 as
@@ -259,7 +278,7 @@ class LFADS(nn.Module):
             o_enc_c_with_f = torch.cat((o_enc_c[:, t], f), dim=-1)
             # Update controller with controller encoder outputs
             h_c = self.controller(self.drop(o_enc_c_with_f), h_c)
-            h_c = torch.clamp(h_c, min=-self.clip_val, max=self.clip_val)
+            h_c = self.drop(h_c.clamp(min=-self.clip_val, max=self.clip_val))
             # Calculate posterior distribution parameters for inferred inputs
             # from controller state
             u_posterior['mean'][:, t] = self.fc_umean(h_c)
@@ -274,7 +293,7 @@ class LFADS(nn.Module):
                 self.u_prior['mean'], self.u_prior['logv'],
                 u_posterior['mean'][:, t][~iPad[:, t]],
                 u_posterior['logv'][:, t][~iPad[:, t]]
-            ) / real_batch_size
+            ) / batch_info[t]
 
             # Update generator
             g = self.generator(u, g)
@@ -379,12 +398,6 @@ class LFADS(nn.Module):
             Dataset with validation data to validate LFADS model. When
             Validation set is None, no validate conducted, and the model
             trained all epoches. Default: None.
-        iPad_train : BoolTensor, optional
-            index padding of training set. This indicate where the training
-            dataset pad with zeros. Default: None.
-        iPad_valid : BoolTensor, optional
-            index padding of validating set. This indicate where the validating
-            dataset pad with zeros. Default: None.
         use_tensorboard : bool, optional
             Whether to write results to tensorboard. Default: False.
         """
@@ -514,7 +527,7 @@ class LFADS(nn.Module):
                         vfigs_dict = self.plot_summary(
                             v_inp[idx, ~v_iPad[idx]], vr[idx, ~v_iPad[idx]],
                             vf[idx, ~v_iPad[idx]], vu[idx, ~v_iPad[idx]],
-                            truth=valid_truth[idx]
+                            truth=valid_truth[idx, ~v_iPad[idx]]
                         )
                         writer.plot_examples(vfigs_dict, epoch, '2_Valid')
             self.current_epoch += 1
@@ -670,6 +683,8 @@ class LFADS(nn.Module):
 
         assert os.path.splitext(filename)[1] == '.pth', \
             'Input filename must have .pth extension'
+
+        print('\nLoading checkpoint ' + filename + '...')
 
         # Load the specific checkpoint
         state = torch.load(filename)
