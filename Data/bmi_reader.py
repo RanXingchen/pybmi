@@ -111,6 +111,7 @@ class BMIReader():
     >>> reader.analysis(verbose=True)
     >>> masked, index = reader.filter((1, 4))
     """
+    # TODO: Add a parameter dictionary instead of this list.
     def __init__(self, neu_binsize, beh_binsize, nbands, method='pmtm', nw=2.5,
                  nfft=1024, bands=[[70, 200]], edge_size=0.0, wave=7, fmin=10,
                  fmax=120, ncontext=0, label_success=3, label_failure=4,
