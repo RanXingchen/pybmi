@@ -35,7 +35,7 @@ class BMIReader():
         Number of frequency bands will be generated.
     method : str, optional
         Method used to compute the spectrogram. It can be either
-        'pmtm' or 'wavelet'. Default: 'pmtm'.
+        'pmtm', 'wavelet', or 'count'. Default: 'pmtm'.
         When 'pmtm' is used, the additional parameters needed:
             nw : float, optional
                 The "time-bandwidth product" for the DPSS used as data windows.
@@ -97,6 +97,12 @@ class BMIReader():
         stat dict contain these statistics information for supported
         BCI paradigm.
 
+    Notes
+    -----
+    The METHOD 'count' is used for the spike data. And for now, it is not
+    implemented in this class. Only supported the '.mat' file data already
+    counted.
+
     Examples
     --------
     >>> path = 'MonkeyData\\201907031450.bmi'
@@ -108,7 +114,7 @@ class BMIReader():
     def __init__(self, neu_binsize, beh_binsize, nbands, method='pmtm', nw=2.5,
                  nfft=1024, bands=[[70, 200]], edge_size=0.0, wave=7, fmin=10,
                  fmax=120, ncontext=0, label_success=3, label_failure=4,
-                 njobs=1, verbose=False):
+                 is_single_trial=False, njobs=1, verbose=False):
         # ------------------------------
         # Parameters of neural reading
         # ------------------------------
@@ -141,12 +147,18 @@ class BMIReader():
         # Average Time of Each Successed Trial.
         self._init_stats()
 
+        # ---------------------------------
+        # Parameters of data properties
+        # ---------------------------------
+        self.is_single_trial = is_single_trial
+
         # Number of cores to do the reading task.
         self.njobs = njobs
         self.verbose = verbose
 
         # Check parameters validation
-        self.method = check_params(method, ['pmtm', 'wavelet'], 'method')
+        self.method = check_params(method, ['pmtm', 'wavelet', 'count'],
+                                   'method')
         if self.method == 'pmtm':
             assert nbands == len(bands), "Error number of frequency bands."
 
@@ -303,8 +315,19 @@ class BMIReader():
             # Reshape the nstamp to equal (T, 1)
             if self.binned_nstamp.shape[0] == 1:
                 self.binned_nstamp = self.binned_nstamp.T
-            assert self.binned_nstamp.shape[0] == self.binned_neural.shape[0],\
-                "Error shape of readed neural data."
+
+            # Make sure the neural data have the same length with time stamps.
+            if self.is_single_trial:
+                # When data formed by single trial, the 1st dim is number
+                # of trials, the 2nd dim is the number of bins of each trial.
+                assert self.binned_nstamp.shape[0] == \
+                    self.binned_neural.shape[0] * self.binned_neural.shape[1],\
+                    "Error shape of readed neural data."
+            else:
+                # The 1st dim of data is concated by all trials' bins.
+                assert self.binned_nstamp.shape[0] == \
+                    self.binned_neural.shape[0], \
+                    "Error shape of readed neural data."
         else:
             # Need to process first.
             if 'ns' in ext:
@@ -414,7 +437,7 @@ class BMIReader():
         # ------------------------------------
         # 5. Get single trial data when necessary
         # ------------------------------------
-        if split_trials:
+        if split_trials and not self.is_single_trial:
             self.pad_idx = self._get_single_trials(self.label_success, p=pad)
         return self.binned_neural, self.binned_motion
 
@@ -572,36 +595,47 @@ class BMIReader():
         stamp_x = np.reshape(self.binned_nstamp, (-1,))
         stamp_y = np.reshape(self.binned_bstamp, (-1,))
 
-        assert len(stamp_x) == T1, \
-            f'Shape error occured! The length of timestamp x should be {T1}.'
-        assert len(stamp_y) == T2, \
-            f'Shape error occured! The length of timestamp y should be {T2}.'
+        # Align neural and behavior data according to time stamps.
+        if self.is_single_trial:
+            # * For SINGLE TRIAL case ...
+            # When data is single trial, T1 and T2 is the number of trials.
+            assert T1 == T2, f'ERROR: Neural data have {T1} trials, '
+            f'but behavioral data have {T2} trials.'
 
-        # First, find the shared part of both timestamp x and timestamp y,
-        # calculate the start and end index of shared part in timestamp y.
-        start = max(stamp_x[0], stamp_y[0])
-        start_index_y = np.argmin(np.abs(stamp_y - start))
-        end = min(stamp_x[-1], stamp_y[-1])
-        end_index_y = np.argmin(np.abs(stamp_y - end)) + 1
+            # ! NOTE: Not implement here.
+            # TODO: Finish single trial data alignment.
+        else:
+            # *When data is SEQUENCIAL ...
+            assert len(stamp_x) == T1, \
+                f'Shape error! The length of timestamp x should be {T1}.'
+            assert len(stamp_y) == T2, \
+                f'Shape error! The length of timestamp y should be {T2}.'
 
-        # Use the start and end index of y data to find aligned x data.
-        index_x = []
-        for i in range(start_index_y, end_index_y):
-            idx = np.argmin(np.abs(stamp_x - stamp_y[i]))
-            if np.abs(stamp_x[idx] - stamp_y[i]) >= self.beh_binsize:
-                print('\nWARNING: The difference of timestamp of x and y at'
-                      f'index {i} are greater than step size: '
-                      f'abs({stamp_x[idx]}-{stamp_y[i]})>={self.beh_binsize}')
-            index_x.append(idx)
+            # First, find the shared part of both timestamp x and timestamp y,
+            # calculate the start and end index of shared part in timestamp y.
+            start = max(stamp_x[0], stamp_y[0])
+            start_index_y = np.argmin(np.abs(stamp_y - start))
+            end = min(stamp_x[-1], stamp_y[-1])
+            end_index_y = np.argmin(np.abs(stamp_y - end)) + 1
 
-        # Cut the data x and y
-        self.binned_neural = self.binned_neural[index_x]
-        self.binned_nstamp = self.binned_nstamp[index_x]
-        self.binned_motion = self.binned_motion[start_index_y:end_index_y]
-        self.binned_bstamp = self.binned_bstamp[start_index_y:end_index_y]
-        self.binned_labels = self.binned_labels[start_index_y:end_index_y]
-        self.binned_spikes = self.binned_spikes[start_index_y:end_index_y]
-        self.binned_target = self.binned_target[start_index_y:end_index_y]
+            # Use the start and end index of y data to find aligned x data.
+            index_x = []
+            for i in range(start_index_y, end_index_y):
+                idx = np.argmin(np.abs(stamp_x - stamp_y[i]))
+                if np.abs(stamp_x[idx] - stamp_y[i]) >= self.beh_binsize:
+                    print('\nWARNING: The difference of timestamp of x and y '
+                          f'at index {i} are greater than step size: abs'
+                          f'({stamp_x[idx]}-{stamp_y[i]})>={self.beh_binsize}')
+                index_x.append(idx)
+
+            # Cut the data x and y
+            self.binned_neural = self.binned_neural[index_x]
+            self.binned_nstamp = self.binned_nstamp[index_x]
+            self.binned_motion = self.binned_motion[start_index_y:end_index_y]
+            self.binned_bstamp = self.binned_bstamp[start_index_y:end_index_y]
+            self.binned_labels = self.binned_labels[start_index_y:end_index_y]
+            self.binned_spikes = self.binned_spikes[start_index_y:end_index_y]
+            self.binned_target = self.binned_target[start_index_y:end_index_y]
 
     def print(self, data, path, name, ext, data_points, duration, t, analyze):
         print('*** FILE INFO **************************')
