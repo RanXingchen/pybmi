@@ -195,9 +195,10 @@ class LFADS_Writer():
         self.writer.add_figure(
             'Factors/' + label, fig_dict['factors'], epoch
         )
-        self.writer.add_figure(
-            'Inputs/' + label, fig_dict['inputs'], epoch
-        )
+        if 'inputs' in fig_dict:
+            self.writer.add_figure(
+                'Inputs/' + label, fig_dict['inputs'], epoch
+            )
         if 'truth' in fig_dict:
             self.writer.add_figure(
                 'Ground_truth/' + label, fig_dict['truth'], epoch

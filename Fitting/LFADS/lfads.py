@@ -42,7 +42,8 @@ def weights_init(m: nn.Module):
             if 'weight' in name:
                 k = p.shape[1]      # Dimensionality of input.
                 # Inplace resetting W ~ N(0, 1/sqrt(K))
-                p.data.normal_(std=k ** -0.5)
+                if p.data.numel() > 0:
+                    p.data.normal_(std=k ** -0.5)
 
 
 class LFADS(nn.Module):
@@ -101,8 +102,9 @@ class LFADS(nn.Module):
                     self.enc_c_dim * 2 + self.f_dim, self.c_dim
                 )
                 # Linear mapping to infer the posterior of gen's input
-                self.fc_umean = nn.Linear(self.c_dim, self.u_dim)
-                self.fc_ulogv = nn.Linear(self.c_dim, self.u_dim)
+                if self.u_dim > 0:
+                    self.fc_umean = nn.Linear(self.c_dim, self.u_dim)
+                    self.fc_ulogv = nn.Linear(self.c_dim, self.u_dim)
 
         # Generator. Note 'u_dim' must greater than 0.
         self.generator = nn.GRUCell(self.u_dim, self.g_dim)
@@ -132,12 +134,13 @@ class LFADS(nn.Module):
             'mean': nn.Parameter(one_g * 0.0),
             'logv': nn.Parameter(one_g * np.log(self.kappa))
         }
-        one_u = torch.ones((self.u_dim,), device='cuda')
-        self.u_prior = {
-            'mean': nn.Parameter(one_u * 0.0),
-            'logv': nn.Parameter(one_u * np.log(self.kappa)),
-            'logt': nn.Parameter(one_u * np.log(10))
-        }
+        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+            one_u = torch.ones((self.u_dim,), device='cuda')
+            self.u_prior = {
+                'mean': nn.Parameter(one_u * 0.0),
+                'logv': nn.Parameter(one_u * np.log(self.kappa)),
+                'logt': nn.Parameter(one_u * np.log(10))
+            }
 
         # --------------------------
         # Useful training variables INIT
@@ -182,7 +185,10 @@ class LFADS(nn.Module):
         h_enc_g, h_enc_c = h
         # Initialize out_enc_g and out_enc_c
         o_enc_g = torch.zeros((2, B, T + 1, self.enc_g_dim), device=x.device)
-        o_enc_c = torch.zeros((2, B, T + 1, self.enc_c_dim), device=x.device)
+        if self.enc_c_dim > 0:
+            o_enc_c = torch.zeros((2, B, T + 1, self.enc_c_dim)).to(x.device)
+        else:
+            o_enc_c = None
 
         # Get batch padding information.
         batch_info = (~iPad).int().sum(dim=0)
@@ -205,24 +211,28 @@ class LFADS(nn.Module):
             o_enc_g[0, :, t] = h_enc_g[0]
             o_enc_g[1, :, -(t + 1)] = h_enc_g[1]
 
-            # Run FORWARD controller encoder
-            h_enc_c[0] = self.encoder_cf(x[:, t - 1], h_enc_c[0].clone())
-            # Unless this batch have at least one value is not padding value,
-            # never start BACKWARD running.
-            if batch_info[-t] != 0:
-                h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
-            # Clip the min and max value of h_enc_c
-            h_enc_c = self.drop(h_enc_c.clamp(-self.clip_val, self.clip_val))
-            # Save current hidden state to output.
-            o_enc_c[0, :, t] = h_enc_c[0]
-            o_enc_c[1, :, -(t + 1)] = h_enc_c[1]
+            if self.enc_c_dim > 0:
+                # Run FORWARD controller encoder
+                h_enc_c[0] = self.encoder_cf(x[:, t - 1], h_enc_c[0].clone())
+                # Unless this batch have at least one value is not padding
+                # value, never start BACKWARD running.
+                if batch_info[-t] != 0:
+                    h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
+                # Clip the min and max value of h_enc_c
+                h_enc_c = self.drop(h_enc_c.clamp(-self.clip_val,
+                                                  self.clip_val))
+                # Save current hidden state to output.
+                o_enc_c[0, :, t] = h_enc_c[0]
+                o_enc_c[1, :, -(t + 1)] = h_enc_c[1]
 
         # Get the real last state of FORWARD encoder_g
         for i, n in enumerate(featu_info):
             h_enc_g[0, i] = o_enc_g[0, i, n]
         # Concatenate forward/backward hidden state for generator.
         h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=-1)
-        o_enc_c = torch.cat((o_enc_c[0, :, 1:], o_enc_c[1, :, :-1]), dim=-1)
+        if self.enc_c_dim > 0:
+            o_enc_c = torch.cat((o_enc_c[0, :, 1:], o_enc_c[1, :, :-1]),
+                                dim=-1)
 
         # Estimating g0 posterior distribution
         g0_mean = self.fc_g0mean(h_enc_g)
@@ -237,7 +247,7 @@ class LFADS(nn.Module):
         return g0, o_enc_c
 
     def generate(self, g: Tensor, o_enc_c: Tensor, h_c: Tensor,
-                 iPad: Tensor = None):
+                 T: int, iPad: Tensor = None):
         """
         Generates the rates using the controller encoder outputs and the
         sampled initial conditions (g0).
@@ -252,7 +262,7 @@ class LFADS(nn.Module):
             Hidden state of controller.
         """
         device = g.device
-        B, T, _ = o_enc_c.shape
+        B = g.shape[0]
 
         # Prepare the sequence container.
         factors = torch.zeros(B, T, self.f_dim).to(device)
@@ -275,25 +285,29 @@ class LFADS(nn.Module):
                 break
             # Concatenate o_enc_c at time t with factors at time t - 1 as
             # input to controller.
-            o_enc_c_with_f = torch.cat((o_enc_c[:, t], f), dim=-1)
-            # Update controller with controller encoder outputs
-            h_c = self.controller(self.drop(o_enc_c_with_f), h_c)
-            h_c = self.drop(h_c.clamp(min=-self.clip_val, max=self.clip_val))
-            # Calculate posterior distribution parameters for inferred inputs
-            # from controller state
-            u_posterior['mean'][:, t] = self.fc_umean(h_c)
-            u_posterior['logv'][:, t] = self.fc_ulogv(h_c)
-            # Sample inputs for generator from u(t) posterior distribution
-            u = self._sample_gaussian(u_posterior['mean'][:, t],
-                                      u_posterior['logv'][:, t])
-            gen_inp[:, t] = u
+            if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+                o_enc_c_with_f = torch.cat((o_enc_c[:, t], f), dim=-1)
+                # Update controller with controller encoder outputs
+                h_c = self.controller(self.drop(o_enc_c_with_f), h_c)
+                h_c = self.drop(h_c.clamp(-self.clip_val, self.clip_val))
+                # Calculate posterior distribution parameters for inferred
+                # inputs from controller state
+                u_posterior['mean'][:, t] = self.fc_umean(h_c)
+                u_posterior['logv'][:, t] = self.fc_ulogv(h_c)
+                # Sample inputs for generator from u(t) posterior distribution
+                u = self._sample_gaussian(u_posterior['mean'][:, t],
+                                          u_posterior['logv'][:, t])
 
-            # KL cost for u(t)
-            self.kl_loss = self.kl_loss + self.gkl_criterion(
-                self.u_prior['mean'], self.u_prior['logv'],
-                u_posterior['mean'][:, t][~iPad[:, t]],
-                u_posterior['logv'][:, t][~iPad[:, t]]
-            ) / batch_info[t]
+                # KL cost for u(t)
+                self.kl_loss = self.kl_loss + self.gkl_criterion(
+                    self.u_prior['mean'], self.u_prior['logv'],
+                    u_posterior['mean'][:, t][~iPad[:, t]],
+                    u_posterior['logv'][:, t][~iPad[:, t]]
+                ) / batch_info[t]
+            else:
+                u = torch.empty(B, self.u_dim).to(device)
+            # Save input of generator.
+            gen_inp[:, t] = u
 
             # Update generator
             g = self.generator(u, g)
@@ -314,7 +328,7 @@ class LFADS(nn.Module):
         x : Tensor
             Single-trial spike data. shape [batch size, time steps, input dim]
         """
-        B, _, N = x.shape
+        B, T, N = x.shape
 
         assert N == self.N, "The input features should be same with N."
         # Update batch size incase the last batch in dataset not enough.
@@ -322,14 +336,21 @@ class LFADS(nn.Module):
 
         # 1.1 Initialize hidden state of encoder for gen and con.
         h_enc_g = self._init_hidden_state((B, self.enc_g_dim), True, x.device)
-        h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True, x.device)
+        if self.enc_c_dim > 0:
+            h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True,
+                                              x.device)
+        else:
+            h_enc_c = None
         # 1.2 Encode the input data for generator and controller respectively.
         g0, o_enc_c = self.encode(x, (h_enc_g, h_enc_c), iPad)
 
         # 2.1 Initialize hidden state for controller.
-        h_c = self._init_hidden_state((B, self.c_dim), device=x.device)
+        if self.c_dim > 0:
+            h_c = self._init_hidden_state((B, self.c_dim), device=x.device)
+        else:
+            h_c = None
         # 2.2. Generate factors and rates.
-        factors, _, u_posterior = self.generate(g0, o_enc_c, h_c, iPad)
+        factors, _, u_posterior = self.generate(g0, o_enc_c, h_c, T, iPad)
         # 2.3 Generate rates from factor state
         rates = torch.exp(self.fc_logrates(factors))
         return factors, rates, u_posterior['mean']
@@ -440,7 +461,11 @@ class LFADS(nn.Module):
 
                 # L2 Loss
                 l2_g = self._gru_hh_l2_loss(self.generator, self.l2_g_scale)
-                l2_c = self._gru_hh_l2_loss(self.controller, self.l2_c_scale)
+                if self.c_dim > 0:
+                    l2_c = self._gru_hh_l2_loss(self.controller,
+                                                self.l2_c_scale)
+                else:
+                    l2_c = 0
                 l2_loss = l2_g + l2_c
                 # Reconstruction loss
                 rec_loss = self.rec_criteria(tr[~iPad] * self.dt,
@@ -568,8 +593,8 @@ class LFADS(nn.Module):
             figs_dict['truth'].suptitle('Inferred vs. Ground-truth rates')
             figs_dict['truth'].legend(['Inferred', 'Ground-truth'])
             figs_dict['r2'] = plot_rsquared(pred, truth)
-
-        figs_dict['inputs'] = plot_umean(umean, self.dt)
+        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+            figs_dict['inputs'] = plot_umean(umean, self.dt)
         return figs_dict
 
     def save_checkpoint(self, save_path):
