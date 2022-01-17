@@ -28,6 +28,7 @@ from torch.utils.data import DataLoader
 from .lfads_defaultparams import default_hyperparams
 from .lfads_utils import plot_traces, plot_factors, plot_rsquared, plot_umean
 from .lfads_utils import LFADS_Writer
+from .lfads_rnn import LFADSGRUCell
 
 
 def weights_init(m: nn.Module):
@@ -104,7 +105,7 @@ class LFADS(nn.Module):
             )
 
         # Generator. Note 'u_dim' must greater than 0.
-        self.generator = nn.GRUCell(self.u_dim, self.g_dim)
+        self.generator = LFADSGRUCell(self.u_dim, self.g_dim)
 
         # Factors from generator output
         self.fc_factors = nn.Linear(self.g_dim, self.f_dim)
@@ -395,13 +396,13 @@ class LFADS(nn.Module):
                 # *Loss computation
 
                 # L2 Loss
-                l2_g = self._gru_hh_l2_loss(self.generator, self.l2_g_scale)
+                l2_g = self.l2_g_scale * self.generator.hidden_weight_l2_norm()
                 if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
-                    l2_c = self._gru_hh_l2_loss(self.controller.controller,
-                                                self.l2_c_scale)
+                    l2_c = self.l2_c_scale * \
+                        self.controller.controller.hidden_weight_l2_norm()
                 else:
                     l2_c = 0
-                l2_loss = l2_g + l2_c
+                l2_loss = 0.5 * (l2_g + l2_c)
                 # Reconstruction loss
                 rec_loss = self.rec_criteria(tr[~iPad] * self.dt,
                                              inp[~iPad]) / inp.shape[0]
@@ -750,10 +751,6 @@ class LFADS(nn.Module):
 
                     print('\n\tLearning rate decreased to %.8f' % self.lr)
 
-    def _gru_hh_l2_loss(self, gru: nn.GRUCell, scale: float):
-        loss = scale * gru.weight_hh.norm(2) / gru.weight_hh.numel()
-        return loss
-
 
 class LFADSEncoder(nn.Module):
     def __init__(self, inp_size, enc_g_dim, g_latent_dim, enc_c_dim=0,
@@ -814,7 +811,7 @@ class LFADSControllerCell(nn.Module):
         self.clip_val = clip_val
 
         self.dropout = nn.Dropout(dropout)
-        self.controller = nn.GRUCell(inp_size, hidden_size)
+        self.controller = LFADSGRUCell(inp_size, hidden_size)
         self.fc_u = nn.Linear(hidden_size, u_dim * 2)
 
     def forward(self, x: Tensor, h: Tensor):
