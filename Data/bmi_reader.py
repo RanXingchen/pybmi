@@ -209,6 +209,27 @@ class BMIReader():
             self.binned_labels = data['labels']
             self.binned_spikes = data['spikes']
             self.binned_target = data['target']
+
+            # Check if the velocity is needed.
+            if 'v' in target:
+                velocity = np.zeros((self.binned_motion.shape))
+                if self.is_single_trial:
+                    velocity[:, 1:] = self.binned_motion[:, 1:] - \
+                        self.binned_motion[:, :-1]
+                else:
+                    velocity[1:] = self.binned_motion[1:] - \
+                        self.binned_motion[:-1]
+                velocity /= self.beh_binsize
+            # Apply the target.
+            if target == 'p':
+                # NOTE: The raw input of mat file must be position.
+                pass
+            elif target == 'v':
+                self.binned_motion = velocity
+            elif target == 'pv':
+                self.binned_motion = np.concatenate(
+                    (self.binned_motion, velocity), axis=-1
+                )
         else:
             tic = time.time()
             beh_filesize = os.path.getsize(file_path)
