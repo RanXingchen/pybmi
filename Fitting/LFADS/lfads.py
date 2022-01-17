@@ -18,6 +18,7 @@ import torch
 import pandas as pd
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils.rnn as rnn_utils
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -85,26 +86,22 @@ class LFADS(nn.Module):
         # NETWORK LAYERS INIT
         # -----------------------
 
-        # Encoder for generator
-        self.encoder_gf = nn.GRUCell(self.N, self.enc_g_dim)
-        self.encoder_gb = nn.GRUCell(self.N, self.enc_g_dim)
-        # FC layer to estimate posterior of g0.
-        self.fc_g0mean = nn.Linear(2 * self.enc_g_dim, self.g_dim)
-        self.fc_g0logv = nn.Linear(2 * self.enc_g_dim, self.g_dim)
+        # Encoder of LFADS
+        self.encoder = LFADSEncoder(
+            self.N, self.enc_g_dim, self.g_latent_dim,
+            self.enc_c_dim, self.dropout, self.clip_val
+        )
+        # Squeeze g_latent_dim to g_dim
+        self.fc_g = LFADSIdentity() if self.g_latent_dim == self.g_dim else \
+            nn.Linear(self.g_latent_dim, self.g_dim)
 
-        if self.enc_c_dim > 0:
-            # Encoder for controller
-            self.encoder_cf = nn.GRUCell(self.N, self.enc_c_dim)
-            self.encoder_cb = nn.GRUCell(self.N, self.enc_c_dim)
-            # Controller
-            if self.c_dim > 0:
-                self.controller = nn.GRUCell(
-                    self.enc_c_dim * 2 + self.f_dim, self.c_dim
-                )
-                # Linear mapping to infer the posterior of gen's input
-                if self.u_dim > 0:
-                    self.fc_umean = nn.Linear(self.c_dim, self.u_dim)
-                    self.fc_ulogv = nn.Linear(self.c_dim, self.u_dim)
+        # The encoder for controller and controller only initialized when
+        # enc_c_dim greater than 0.
+        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+            self.controller = LFADSControllerCell(
+                self.enc_c_dim * 2 + self.f_dim, self.c_dim, self.u_dim,
+                self.dropout, self.clip_val
+            )
 
         # Generator. Note 'u_dim' must greater than 0.
         self.generator = nn.GRUCell(self.u_dim, self.g_dim)
@@ -129,7 +126,7 @@ class LFADS(nn.Module):
         # --------------------------
         # LEARNABLE PRIOR PARAMETERS INIT
         # --------------------------
-        one_g = torch.ones((self.g_dim,), device='cuda')
+        one_g = torch.ones((self.g_latent_dim,), device='cuda')
         self.g0_prior = {
             'mean': nn.Parameter(one_g * 0.0),
             'logv': nn.Parameter(one_g * np.log(self.kappa))
@@ -180,65 +177,11 @@ class LFADS(nn.Module):
             Shape [2, Batch size, encoder_g/c dim], where the 0 is the forward
             and 1 is the backward.
         """
-        B, T, _ = x.shape
-        # Get initial hidden state of h_enc_g and h_enc_c
-        h_enc_g, h_enc_c = h
-        # Initialize out_enc_g and out_enc_c
-        o_enc_g = torch.zeros((2, B, T + 1, self.enc_g_dim), device=x.device)
-        if self.enc_c_dim > 0:
-            o_enc_c = torch.zeros((2, B, T + 1, self.enc_c_dim)).to(x.device)
-        else:
-            o_enc_c = None
-
-        # Get batch padding information.
-        batch_info = (~iPad).int().sum(dim=0)
-        featu_info = (~iPad).int().sum(dim=1)
-
-        # Dropout some data
-        x = self.drop(x)
         # Encode data into forward and backward generator encoders to
-        # produce h_enc_g for generator initial conditions.
-        for t in range(1, x.shape[1] + 1):
-            # Run FORWARD generator encoder RNN over data
-            h_enc_g[0] = self.encoder_gf(x[:, t - 1], h_enc_g[0].clone())
-            # Unless this batch have at least one value is not padding value,
-            # never start BACKWARD running.
-            if batch_info[-t] != 0:
-                h_enc_g[1] = self.encoder_gb(x[:, -t], h_enc_g[1].clone())
-            # Clip the min and max value of h_enc_g
-            h_enc_g = self.drop(h_enc_g.clamp(-self.clip_val, self.clip_val))
-            # Save current hidden state to output.
-            o_enc_g[0, :, t] = h_enc_g[0]
-            o_enc_g[1, :, -(t + 1)] = h_enc_g[1]
-
-            if self.enc_c_dim > 0:
-                # Run FORWARD controller encoder
-                h_enc_c[0] = self.encoder_cf(x[:, t - 1], h_enc_c[0].clone())
-                # Unless this batch have at least one value is not padding
-                # value, never start BACKWARD running.
-                if batch_info[-t] != 0:
-                    h_enc_c[1] = self.encoder_cb(x[:, -t], h_enc_c[1].clone())
-                # Clip the min and max value of h_enc_c
-                h_enc_c = self.drop(h_enc_c.clamp(-self.clip_val,
-                                                  self.clip_val))
-                # Save current hidden state to output.
-                o_enc_c[0, :, t] = h_enc_c[0]
-                o_enc_c[1, :, -(t + 1)] = h_enc_c[1]
-
-        # Get the real last state of FORWARD encoder_g
-        for i, n in enumerate(featu_info):
-            h_enc_g[0, i] = o_enc_g[0, i, n]
-        # Concatenate forward/backward hidden state for generator.
-        h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=-1)
-        if self.enc_c_dim > 0:
-            o_enc_c = torch.cat((o_enc_c[0, :, 1:], o_enc_c[1, :, :-1]),
-                                dim=-1)
-
-        # Estimating g0 posterior distribution
-        g0_mean = self.fc_g0mean(h_enc_g)
-        g0_logv = self.fc_g0logv(h_enc_g)
+        # produce g0 distribution for generator initial conditions.
+        g0_mean, g0_logv, o_enc_c = self.encoder(x, h, iPad)
         # Sample initial conditions of generator from posterior distribution
-        g0 = self._sample_gaussian(g0_mean, g0_logv)
+        g0 = self.fc_g(self._sample_gaussian(g0_mean, g0_logv))
 
         # KL cost for g(0)
         self.kl_loss = self.gkl_criterion(
@@ -288,21 +231,18 @@ class LFADS(nn.Module):
             if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
                 o_enc_c_with_f = torch.cat((o_enc_c[:, t], f), dim=-1)
                 # Update controller with controller encoder outputs
-                h_c = self.controller(self.drop(o_enc_c_with_f), h_c)
-                h_c = self.drop(h_c.clamp(-self.clip_val, self.clip_val))
+                u_mean, u_logv, h_c = self.controller(o_enc_c_with_f, h_c)
                 # Calculate posterior distribution parameters for inferred
                 # inputs from controller state
-                u_posterior['mean'][:, t] = self.fc_umean(h_c)
-                u_posterior['logv'][:, t] = self.fc_ulogv(h_c)
+                u_posterior['mean'][:, t] = u_mean
+                u_posterior['logv'][:, t] = u_logv
                 # Sample inputs for generator from u(t) posterior distribution
-                u = self._sample_gaussian(u_posterior['mean'][:, t],
-                                          u_posterior['logv'][:, t])
+                u = self._sample_gaussian(u_mean, u_logv)
 
                 # KL cost for u(t)
-                self.kl_loss = self.kl_loss + self.gkl_criterion(
+                self.kl_loss += self.gkl_criterion(
                     self.u_prior['mean'], self.u_prior['logv'],
-                    u_posterior['mean'][:, t][~iPad[:, t]],
-                    u_posterior['logv'][:, t][~iPad[:, t]]
+                    u_mean[~iPad[:, t]], u_logv[~iPad[:, t]]
                 ) / batch_info[t]
             else:
                 u = torch.empty(B, self.u_dim).to(device)
@@ -336,19 +276,14 @@ class LFADS(nn.Module):
 
         # 1.1 Initialize hidden state of encoder for gen and con.
         h_enc_g = self._init_hidden_state((B, self.enc_g_dim), True, x.device)
-        if self.enc_c_dim > 0:
-            h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True,
-                                              x.device)
-        else:
-            h_enc_c = None
+        h_enc_c = self._init_hidden_state((B, self.enc_c_dim), True, x.device)\
+            if self.enc_c_dim > 0 else None
         # 1.2 Encode the input data for generator and controller respectively.
         g0, o_enc_c = self.encode(x, (h_enc_g, h_enc_c), iPad)
 
         # 2.1 Initialize hidden state for controller.
-        if self.c_dim > 0:
-            h_c = self._init_hidden_state((B, self.c_dim), device=x.device)
-        else:
-            h_c = None
+        h_c = self._init_hidden_state((B, self.c_dim), device=x.device)\
+            if self.c_dim > 0 else None
         # 2.2. Generate factors and rates.
         factors, _, u_posterior = self.generate(g0, o_enc_c, h_c, T, iPad)
         # 2.3 Generate rates from factor state
@@ -461,8 +396,8 @@ class LFADS(nn.Module):
 
                 # L2 Loss
                 l2_g = self._gru_hh_l2_loss(self.generator, self.l2_g_scale)
-                if self.c_dim > 0:
-                    l2_c = self._gru_hh_l2_loss(self.controller,
+                if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+                    l2_c = self._gru_hh_l2_loss(self.controller.controller,
                                                 self.l2_c_scale)
                 else:
                     l2_c = 0
@@ -818,3 +753,80 @@ class LFADS(nn.Module):
     def _gru_hh_l2_loss(self, gru: nn.GRUCell, scale: float):
         loss = scale * gru.weight_hh.norm(2) / gru.weight_hh.numel()
         return loss
+
+
+class LFADSEncoder(nn.Module):
+    def __init__(self, inp_size, enc_g_dim, g_latent_dim, enc_c_dim=0,
+                 dropout=0.0, clip_val=5.0):
+        super(LFADSEncoder, self).__init__()
+        self.enc_g_dim = enc_g_dim
+        self.g_latent_dim = g_latent_dim
+        self.enc_c_dim = enc_c_dim
+        self.clip_val = clip_val
+
+        self.dropout = nn.Dropout(dropout)
+
+        self.encoder_g = nn.GRU(inp_size, enc_g_dim, bidirectional=True,
+                                batch_first=True)
+        self.fc_g0 = nn.Linear(2 * enc_g_dim, 2 * g_latent_dim)
+
+        if enc_c_dim > 0:
+            self.encoder_c = nn.GRU(inp_size, enc_c_dim, bidirectional=True,
+                                    batch_first=True)
+
+    def forward(self, x: Tensor, h: tuple, iPad: Tensor):
+        self.encoder_g.flatten_parameters()
+        if self.enc_c_dim > 0:
+            self.encoder_c.flatten_parameters()
+
+        # Get the real length of current batch data.
+        x_len = (~iPad).long().sum(1).cpu()
+
+        h_enc_g, h_enc_c = h
+
+        # Run bidirectional RNN over data
+        x = self.dropout(x)
+
+        x_pack = rnn_utils.pack_padded_sequence(x, x_len, batch_first=True,
+                                                enforce_sorted=False)
+        _, h_enc_g = self.encoder_g(x_pack, h_enc_g.contiguous())
+        h_enc_g = self.dropout(h_enc_g.clamp(-self.clip_val, self.clip_val))
+        h_enc_g = torch.cat((h_enc_g[0], h_enc_g[1]), dim=1)
+
+        g0_mean, g0_logv = torch.split(
+            self.fc_g0(h_enc_g), self.g_latent_dim, dim=1
+        )
+
+        if self.enc_c_dim > 0:
+            o_enc_c, _ = self.encoder_c(x_pack, h_enc_c.contiguous())
+            o_enc_c, _ = rnn_utils.pad_packed_sequence(o_enc_c, True)
+            o_enc_c = torch.clamp(o_enc_c, -self.clip_val, self.clip_val)
+        else:
+            o_enc_c = None
+        return g0_mean, g0_logv, o_enc_c
+
+
+class LFADSControllerCell(nn.Module):
+    def __init__(self, inp_size, hidden_size, u_dim, dropout=0.0,
+                 clip_val=5.0):
+        super(LFADSControllerCell, self).__init__()
+        self.u_dim = u_dim
+        self.clip_val = clip_val
+
+        self.dropout = nn.Dropout(dropout)
+        self.controller = nn.GRUCell(inp_size, hidden_size)
+        self.fc_u = nn.Linear(hidden_size, u_dim * 2)
+
+    def forward(self, x: Tensor, h: Tensor):
+        h = self.controller(self.dropout(x), h)
+        h = h.clamp(-self.clip_val, self.clip_val)
+        u_mean, u_logv = torch.split(self.fc_u(h), self.u_dim, dim=1)
+        return u_mean, u_logv, h
+
+
+class LFADSIdentity(nn.Module):
+    def __init__(self):
+        super(LFADSIdentity, self).__init__()
+
+    def forward(self, x: Tensor):
+        return x

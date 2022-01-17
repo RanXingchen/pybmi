@@ -3,6 +3,8 @@ default_hyperparams = {
     # ==========================================
     # Hidden size of the generator.
     'g_dim':                        100,
+    # Dimensionality of the initial conditions.
+    'g_latent_dim':                 64,
     # Dimensionality of the inferred inputs to the generator.
     'u_dim':                        1,
     # Hidden size of the encoder for the generator.

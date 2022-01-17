@@ -251,11 +251,12 @@ class LFADS_Writer():
                         modules.get(name).weight_hh.grad.data.norm(), step
                     )
             elif 'fc' in name or 'conv' in name:
-                self.writer.add_scalar(
-                    '3_Weight_norms/%i_%s' % (i + 1, name),
-                    modules.get(name).weight.data.norm(), step
-                )
-                if step > 1:
+                if hasattr(modules.get(name), 'weight'):
+                    self.writer.add_scalar(
+                        '3_Weight_norms/%i_%s' % (i + 1, name),
+                        modules.get(name).weight.data.norm(), step
+                    )
+                if step > 1 and hasattr(modules.get(name), 'weight'):
                     self.writer.add_scalar(
                         '4_Gradient_norms/%i_%s' % (i + 1, name),
                         modules.get(name).weight.grad.data.norm(), step
