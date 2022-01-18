@@ -24,6 +24,7 @@ import numpy as np
 
 from torch import Tensor
 from torch.utils.data import DataLoader
+from typing import Dict
 
 from .lfads_defaultparams import default_hyperparams
 from .lfads_utils import plot_traces, plot_factors, plot_rsquared, plot_umean
@@ -134,7 +135,7 @@ class LFADS(nn.Module):
         }
         if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
             one_u = torch.ones((self.u_dim,), device='cuda')
-            self.u_prior = {
+            self.u_prior_gp = {
                 'mean': nn.Parameter(one_u * 0.0),
                 'logv': nn.Parameter(one_u * np.log(self.kappa)),
                 'logt': nn.Parameter(one_u * np.log(10))
@@ -239,12 +240,6 @@ class LFADS(nn.Module):
                 u_posterior['logv'][:, t] = u_logv
                 # Sample inputs for generator from u(t) posterior distribution
                 u = self._sample_gaussian(u_mean, u_logv)
-
-                # KL cost for u(t)
-                self.kl_loss += self.gkl_criterion(
-                    self.u_prior['mean'], self.u_prior['logv'],
-                    u_mean[~iPad[:, t]], u_logv[~iPad[:, t]]
-                ) / batch_info[t]
             else:
                 u = torch.empty(B, self.u_dim).to(device)
             # Save input of generator.
@@ -257,6 +252,15 @@ class LFADS(nn.Module):
             f = self.fc_factors(self.drop(g))
             factors[:, t] = f
         # END of running time stamp.
+
+        if self.enc_c_dim > 0 and self.c_dim > 0 and self.u_dim > 0:
+            # Instantiate AR1 process as mean and variance per time step
+            u_prior = self._gp_to_normal(self.u_prior_gp, gen_inp)
+            # KL cost for u(t)
+            self.kl_loss += self.gkl_criterion(u_prior['mean'][~iPad],
+                                               u_prior['logv'][~iPad],
+                                               u_posterior['mean'][~iPad],
+                                               u_posterior['logv'][~iPad]) / B
 
         return factors, gen_inp, u_posterior
 
@@ -750,6 +754,27 @@ class LFADS(nn.Module):
                     self.last_decay_epoch = epoch
 
                     print('\n\tLearning rate decreased to %.8f' % self.lr)
+
+    def _gp_to_normal(self, prior_gp: Dict[Tensor, Tensor], process: Tensor):
+        """
+        Convert gaussian process with given process mean, process log-variance,
+        process tau, and realized process to mean and log-variance of diagonal
+        Gaussian for each time-step.
+        """
+        B, T, U = process.shape
+        device = process.device
+
+        mean = prior_gp['mean'] * torch.ones((B, 1, U)).to(device)
+        logv = prior_gp['logv'] * torch.ones((B, 1, U)).to(device)
+
+        gp_logt = torch.exp(-1 / prior_gp['logt'].exp())
+
+        ar_term = (process[:, :-1] - prior_gp['mean']) * gp_logt
+        mean = torch.cat((mean, prior_gp['mean'] + ar_term), dim=1)
+
+        ar_logv = torch.log(1 - gp_logt.pow(2)) + logv.repeat(1, T - 1, 1)
+        logv = torch.cat((logv, ar_logv), dim=1)
+        return {'mean': mean, 'logv': logv}
 
 
 class LFADSEncoder(nn.Module):

@@ -347,6 +347,8 @@ class BMIReader():
         else:
             # Need to process first.
             if 'ns' in ext:
+                # Indicate the save name is spike data.
+                name += '.lfp'
                 # Read raw data of NSx
                 nsx_file = NsxFile(file_path)
                 raw_data = nsx_file.getdata()
