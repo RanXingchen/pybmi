@@ -445,7 +445,7 @@ class NevFile:
         This function is used to return a set of data from the NSx datafile.
 
         :param elec_ids: [optional] {list} User selection of elec_ids to extract specific spike waveforms (e.g., [13])
-        :param wave_read: [optional] {STR} 'read' or 'no_read' - whether to read waveforms or not
+        :param wave_read: [optional] {STR} 'read' or 'noread' - whether to read waveforms or not
         :return: output: {Dictionary} with one or more of the following dictionaries (all include TimeStamps)
                     dig_events:            Reason, Data, [for file spec 2.2 and below, AnalogData and AnalogDataUnits]
                     spike_events:          Units='nV', ChannelID, NEUEVWAV_HeaderIndices, Classification, Waveforms

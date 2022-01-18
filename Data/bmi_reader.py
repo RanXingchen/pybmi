@@ -6,7 +6,7 @@ import scipy.io as scio
 
 from joblib import Parallel, delayed
 from struct import unpack
-from pybmi.data.brPY.brpylib import NsxFile
+from pybmi.data.brPY.brpylib import NsxFile, NevFile
 from pybmi.utils.utils import npc_remove, check_params, check_file
 from pybmi.signals.spectrogram import pmtm, tfrscalo
 
@@ -96,12 +96,6 @@ class BMIReader():
         the raw data, e.g., success rate, number of trials count. The
         stat dict contain these statistics information for supported
         BCI paradigm.
-
-    Notes
-    -----
-    The METHOD 'count' is used for the spike data. And for now, it is not
-    implemented in this class. Only supported the '.mat' file data already
-    counted.
 
     Examples
     --------
@@ -370,6 +364,55 @@ class BMIReader():
                 self.binned_nstamp = np.linspace(
                     t0, len(raw_data) - 1, len(raw_data), dtype=int
                 ) / self.header['fs_neural']
+            elif ext == '.nev':
+                # Indicate the save name is spike data.
+                name += '.spike'
+
+                tic = time.time()
+                # Read raw data of NEV.
+                nev_file = NevFile(file_path)
+                # Get the wanted channel's data.
+                elec_ids = 'all' if ch_index is None else \
+                    (ch_index + 1).tolist()
+                raw_data = nev_file.getdata(elec_ids, 'noread')['spike_events']
+                # Close nev file.
+                nev_file.close()
+                # Record the time of reading nev file.
+                toc = time.time()
+                print('The load time was for NEV file was %.2f seconds' %
+                      (toc - tic))
+
+                # Check if there are some channels have no activity.
+                def append_missed_chn(data: dict, ch: int):
+                    data['ChannelID'].append(ch)
+                    data['TimeStamps'].append([])
+                    data['NEUEVWAV_HeaderIndices'].append(None)
+                    data['Classification'].append([])
+                    return data
+
+                if len(elec_ids) > len(raw_data['ChannelID']):
+                    # Find out the id of missed channel.
+                    sorted_id = np.sort(np.asarray(raw_data['ChannelID']))
+                    # Check the channels head, tail, and body, respectively.
+                    if sorted_id[0] != elec_ids[0]:
+                        # Check the head
+                        for ch in range(elec_ids[0], sorted_id[0]):
+                            raw_data = append_missed_chn(raw_data, ch)
+                    if sorted_id[-1] != elec_ids[-1]:
+                        # Check the tail
+                        for ch in range(sorted_id[-1], elec_ids[-1]):
+                            raw_data = append_missed_chn(raw_data, ch + 1)
+                    # Check the body.
+                    idx = np.where((sorted_id[1:] - sorted_id[:-1]) > 1)[0]
+                    if idx.size > 0:
+                        # The missed channel at the middle of sequence.
+                        missed_ch = (ch_index + 1)[idx + 1]
+                        for offset, ch in enumerate(missed_ch):
+                            raw_data = append_missed_chn(raw_data, ch + offset)
+
+                # Useful recording parameters of neural data.
+                self.header['fs_neural'] = \
+                    int(nev_file.basic_header['SampleTimeResolution'])
             elif ext == '.bin':
                 with open(file_path, 'rb') as f:
                     # The first element of bin file store the number of
@@ -390,7 +433,8 @@ class BMIReader():
             # End of reading different file format.
 
             # Do common avearage reference
-            raw_data -= np.mean(raw_data, axis=-1, keepdims=True)
+            if ext != '.nev':
+                raw_data -= np.mean(raw_data, axis=-1, keepdims=True)
             # Computing LFP from the raw data.
             self.binned_neural = self._bin_neural(raw_data)
             # Check if both have same length
@@ -874,18 +918,18 @@ class BMIReader():
         self.stat['failed_time'] = 0
         self.stat['time_to_target'] = 0
 
-    def _bin_neural(self, x: np.ndarray):
+    def _bin_neural(self, x):
         """
         Computing LFP by different method.
 
         Parameters
         ----------
-        x : ndarray, shape (N, C)
-            The input raw data.
+        x : ndarray or dict
+            The input raw data. If type is ndarray, shape (N, C).
         """
-        N, C = x.shape  # [Number of samples, Number of Channels]
-
         if self.method == 'pmtm':
+            N, C = x.shape  # [Number of samples, Number of Channels]
+
             step = int(self.header['fs_neural'] * self.neu_binsize)
             nbins = N // step
             # MTM PSD estimation.
@@ -922,6 +966,56 @@ class BMIReader():
             #  -> permute it to (nbins, nch, nlag, nfreq)
             neural = np.transpose(neural, (0, 1, 3, 2))
             neural = np.reshape(neural, (neural.shape[0], neural.shape[1], -1))
+        elif self.method == 'count':
+            MAX_UNIT = 5
+
+            channel_id = x['ChannelID']
+            timestamps = x['TimeStamps']
+            classification = x['Classification']
+
+            # Find out max timestamp of all channels.
+            maxt = 0
+            for ts in timestamps:
+                if ts and maxt < ts[-1]:
+                    maxt = ts[-1]
+            # Calculate number of bins of neural data.
+            nbins = np.ceil(maxt / self.header['fs_neural'] / self.neu_binsize)
+            nbins = int(nbins)
+            # Get the neural stamps
+            self.binned_nstamp = np.linspace(
+                    0, nbins - 1, nbins, dtype=int
+                ) * self.neu_binsize
+            # Initialize the neural data object.
+            sorted_neural = np.zeros((nbins, max(channel_id), MAX_UNIT))
+            unsorted_neural = np.zeros((nbins, max(channel_id), 1))
+
+            def classify_spikes(nbin, nch, nclass):
+                if nclass == 'none':
+                    # The class 'none' means unsort spike event.
+                    unsorted_neural[nbin, nch - 1] += 1
+                elif isinstance(nclass, int):
+                    sorted_neural[nbin, nch - 1, nclass - 1] += 1
+
+            # Count the spike data.
+            for ch, ts, cs in zip(channel_id, timestamps, classification):
+                # 'ts': time sequence for current channel
+                # 'cs': class sequence for current channel
+
+                # Convert the event occored time in seconds.
+                ts = np.asarray(ts) / self.header['fs_neural']
+                # Count spikes for current channel.
+                for t, c in zip(ts, cs):
+                    # 't': time of spike event occored.
+                    # 'c': the class of this spike event.
+                    bin = t / (self.neu_binsize + np.finfo(np.float64).eps)
+                    classify_spikes(int(bin), ch, c)
+            # Return sorted_neural if not all zero.
+            is_sua = sorted_neural.sum() != 0
+            neural = sorted_neural if is_sua else unsorted_neural
+            # Check the useful classes of neural
+            if is_sua:
+                actived_units = neural.sum(axis=0).sum(axis=0) > 0
+                neural = neural[:, :, actived_units]
         return neural
 
     def _get_single_trials(self, end_label, p=0) -> np.ndarray:
