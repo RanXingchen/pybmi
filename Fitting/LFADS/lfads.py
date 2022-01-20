@@ -29,6 +29,7 @@ from typing import Dict
 from .lfads_defaultparams import default_hyperparams
 from .lfads_utils import plot_traces, plot_factors, plot_rsquared, plot_umean
 from .lfads_utils import LFADS_Writer
+from .lfads_utils import find_checkpoint
 from .lfads_rnn import LFADSGRUCell
 
 
@@ -614,42 +615,7 @@ class LFADS(nn.Module):
         if not os.path.isfile(loadpath):
             # The path of model folder.
             model_loadpath = os.path.join(loadpath, self.run_name + 'models')
-            # Get checkpoint filenames
-            try:
-                _, _, filenames = list(os.walk(model_loadpath))[0]
-            except IndexError:
-                return
-            assert len(filenames) > 0, 'No models under ' + model_loadpath
-
-            # Sort in ascending order
-            filenames.sort()
-            # Split filenames into attributes (date, epoch, loss)
-            split_filenames = [os.path.splitext(f)[0].split('_')
-                               for f in filenames]
-            dates = [att[0] for att in split_filenames]
-            epochs = [att[2] for att in split_filenames]
-            losses = [att[-1] for att in split_filenames]
-
-            if mode == 'best':
-                # Get filename with lowest loss.
-                # If conflict, take most recent of subset.
-                losses.sort()
-                best = losses[0]
-                filename = [f for f in filenames if best in f][-1]
-            elif mode == 'recent':
-                # Get filename with most recent timestamp.
-                # If conflict, take first one
-                dates.sort()
-                recent = dates[-1]
-                filename = [f for f in filenames if recent in f][0]
-            else:
-                # Get filename with most number of epochs run.
-                # If conflict, take most recent of subset.
-                epochs.sort()
-                longest = epochs[-1]
-                filename = [f for f in filenames if longest in f][-1]
-            # Get the full path filename
-            filename = os.path.join(model_loadpath, filename)
+            filename = find_checkpoint(model_loadpath, mode)
         else:
             filename = loadpath
         # END OF loadpath IS FOLDER.

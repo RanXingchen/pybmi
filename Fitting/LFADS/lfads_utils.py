@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pybmi as bmi
+import os
 
 from torch.utils.tensorboard import SummaryWriter
 from numpy import ndarray
@@ -264,3 +265,42 @@ class LFADS_Writer():
 
     def close(self):
         self.writer.close()
+
+
+def find_checkpoint(path, mode='best') -> str:
+    # Get checkpoint filenames
+    try:
+        _, _, filenames = list(os.walk(path))[0]
+    except IndexError:
+        return
+    assert len(filenames) > 0, 'No models under ' + path
+
+    # Sort in ascending order
+    filenames.sort()
+    # Split filenames into attributes (date, epoch, loss)
+    split_filenames = [os.path.splitext(f)[0].split('_') for f in filenames]
+    dates = [att[0] for att in split_filenames]
+    epochs = [att[2] for att in split_filenames]
+    losses = [att[-1] for att in split_filenames]
+
+    if mode == 'best':
+        # Get filename with lowest loss.
+        # If conflict, take most recent of subset.
+        losses.sort()
+        best = losses[0]
+        filename = [f for f in filenames if best in f][-1]
+    elif mode == 'recent':
+        # Get filename with most recent timestamp.
+        # If conflict, take first one
+        dates.sort()
+        recent = dates[-1]
+        filename = [f for f in filenames if recent in f][0]
+    else:
+        # Get filename with most number of epochs run.
+        # If conflict, take most recent of subset.
+        epochs.sort()
+        longest = epochs[-1]
+        filename = [f for f in filenames if longest in f][-1]
+    # Get the full path filename
+    filename = os.path.join(path, filename)
+    return filename
