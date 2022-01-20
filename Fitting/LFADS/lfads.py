@@ -537,7 +537,7 @@ class LFADS(nn.Module):
             figs_dict['inputs'] = plot_umean(umean, self.dt)
         return figs_dict
 
-    def save_checkpoint(self, save_path):
+    def save_checkpoint(self, save_path, max_save=5):
         """
         Save checkpoint of network parameters and optimizer state.
 
@@ -545,10 +545,12 @@ class LFADS(nn.Module):
         ----------
         save_path : str
             The path used to save the model.
+        max_save : int
+            The maximum number of saved checkpoint.
 
         Notes
         -----
-        Output filename of format [timestamp]_epoch_[epoch]_loss_[valid].pth:
+        Output filename of format [timestamp]_epoch_[epoch]_loss_[valid].pt:
             - timestamp   (YYMMDDhhmm)
             - epoch       (int)
             - loss        (float with decimal point replaced by -)
@@ -564,7 +566,7 @@ class LFADS(nn.Module):
         # Get training_error as string
         loss = str(self.loss_dict['valid'][-1]).replace('.', '-')
 
-        model_filename = '%s_epoch_%s_loss_%s.pth' % (timestamp, epoch, loss)
+        model_filename = '%s_epoch_%s_loss_%s.pt' % (timestamp, epoch, loss)
 
         # Create dictionary of training variables
         train_dict = {
@@ -581,6 +583,12 @@ class LFADS(nn.Module):
             os.path.join(model_savepath, model_filename)
         )
 
+        # Check if the saved file number is larger than max save number.
+        saved_models = os.listdir(model_savepath)
+        saved_models.sort()
+        if len(saved_models) > max_save:
+            os.remove(os.path.join(model_savepath, saved_models[0]))
+
     def load_checkpoint(self, loadpath, mode='best'):
         """
         Load checkpoint of network parameters and optimizer state.
@@ -588,9 +596,9 @@ class LFADS(nn.Module):
         Parameters
         ----------
         loadpath : str
-            The path where store the model .pth file.
+            The path where store the model .pt file.
         mode : str, optional
-            Path to input file, must have '.pth' extension. It can
+            Path to input file, must have '.pt' extension. It can
             be one of 'best', 'recent', or 'longest'.
             - 'best': checkpoint with lowest saved loss.
             - 'recent': most recent checkpoint.
@@ -646,8 +654,8 @@ class LFADS(nn.Module):
             filename = loadpath
         # END OF loadpath IS FOLDER.
 
-        assert os.path.splitext(filename)[1] == '.pth', \
-            'Input filename must have .pth extension'
+        assert os.path.splitext(filename)[1] == '.pt', \
+            'Input filename must have .pt extension'
 
         print('\nLoading checkpoint ' + filename + '...')
 
