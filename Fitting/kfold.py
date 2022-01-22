@@ -44,14 +44,17 @@ def kfold(trainx, trainy, nfold, func, *arg):
         losses.append(loss.item())
     else:
         # The number of validation data points in each fold
-        len_eval = trainx.shape[0] // nfold
+        len_eval_inp = trainx.shape[0] // nfold
+        len_eval_trg = trainy.shape[0] // nfold
         for k in range(nfold):
             # Mark the index of validation data to True to split them.
-            idx_eval = np.zeros(trainx.shape[0], dtype=np.bool)
-            idx_eval[k * len_eval:(k + 1) * len_eval] = True
+            idx_eval_inp = np.zeros(trainx.shape[0], dtype=np.bool)
+            idx_eval_inp[k * len_eval_inp:(k + 1) * len_eval_inp] = True
+            idx_eval_trg = np.zeros(trainy.shape[0], dtype=np.bool)
+            idx_eval_trg[k * len_eval_trg:(k + 1) * len_eval_trg] = True
             # Split the training data and validation data.
-            tinp, einp = trainx[~idx_eval], trainx[idx_eval]
-            ttrg, etrg = trainy[~idx_eval], trainy[idx_eval]
+            tinp, einp = trainx[~idx_eval_inp], trainx[idx_eval_inp]
+            ttrg, etrg = trainy[~idx_eval_trg], trainy[idx_eval_trg]
             # Decoding the data of current fold.
             _, loss = func(tinp, ttrg, einp, etrg, *arg)
             # Store the criterion value.

@@ -60,7 +60,7 @@ class LFADS(nn.Module):
     pp. 805-815, Oct. 2018, doi: 10.1038/s41592-018-0109-9.
     """
     def __init__(self, N, ncomponents, dt, hyperparams=None,
-                 run_name=''):
+                 run_name='', verbose=False):
         """
         Create an LFADS model.
 
@@ -82,6 +82,7 @@ class LFADS(nn.Module):
         self.f_dim = ncomponents
         self.dt = dt
         self.run_name = run_name
+        self.verbose = verbose
         # Get the hyperparameters
         self._update_hyperparams(default_hyperparams, hyperparams)
 
@@ -367,15 +368,16 @@ class LFADS(nn.Module):
         t_dl = DataLoader(t_dts, self.batch_size, True)
         # Initialize tensorboard
         if use_tensorboard:
-            tb_folder = os.path.join(save_path, self.run_name + 'tensorboard')
+            tb_folder = os.path.join(save_path, self.run_name + '.tensorboard')
             if not os.path.exists(tb_folder):
                 os.mkdir(tb_folder)
             writer = LFADS_Writer(tb_folder)
 
         # Start training LFADS.
-        print('\n=========================')
-        print('Beginning training LFADS...')
-        print('=========================\n')
+        if self.verbose:
+            print('\n=========================')
+            print('Beginning training LFADS...')
+            print('=========================\n')
         # For each epoch ...
         for epoch in range(self.current_epoch, self.epoch):
             # If minimum learning rate reached, break training loop.
@@ -446,8 +448,10 @@ class LFADS(nn.Module):
             vf, vr, vu, vloss, vloss_rec, vloss_kl = \
                 self.predict(v_dts, l2_loss, pad)
             # Print Epoch Loss
-            print('Epoch: %4d, Step: %5d, train loss: %.3f, valid loss: %.3f'
-                  % (epoch + 1, self.current_step, tloss, vloss))
+            if self.verbose:
+                print('Epoch: %4d, Step: %5d, train loss: %.3f, '
+                      'valid loss: %.3f' % (epoch + 1, self.current_step,
+                                            tloss, vloss))
             # Store loss
             self.loss_dict['train'].append(tloss)
             self.loss_dict['train_rec'].append(tloss_rec)
@@ -502,14 +506,16 @@ class LFADS(nn.Module):
         if use_tensorboard:
             writer.close()
 
-        df = pd.DataFrame(self.loss_dict)
-        df.to_csv(os.path.join(save_path, self.run_name + 'loss.csv'),
-                  index_label='epoch')
+        if self.verbose:
+            df = pd.DataFrame(self.loss_dict)
+            df.to_csv(os.path.join(save_path, self.run_name + '.loss.csv'),
+                      index_label='epoch')
         # Save a final checkpoint
         self.save_checkpoint(save_path)
 
         # Print message
-        print('...training complete.')
+        if self.verbose:
+            print('...training complete.')
 
     def plot_summary(self, true, pred, factors, umean, truth=None):
         plt.close()
@@ -556,7 +562,7 @@ class LFADS(nn.Module):
             - epoch       (int)
             - loss        (float with decimal point replaced by -)
         """
-        model_savepath = os.path.join(save_path, self.run_name + 'models')
+        model_savepath = os.path.join(save_path, self.run_name + '.models')
         if not os.path.exists(model_savepath):
             os.mkdir(model_savepath)
 
@@ -614,7 +620,7 @@ class LFADS(nn.Module):
         # quality (best, recent, longest).
         if not os.path.isfile(loadpath):
             # The path of model folder.
-            model_loadpath = os.path.join(loadpath, self.run_name + 'models')
+            model_loadpath = os.path.join(loadpath, self.run_name + '.models')
             filename = find_checkpoint(model_loadpath, mode)
         else:
             filename = loadpath
@@ -623,7 +629,8 @@ class LFADS(nn.Module):
         assert os.path.splitext(filename)[1] == '.pt', \
             'Input filename must have .pt extension'
 
-        print('\nLoading checkpoint ' + filename + '...')
+        if self.verbose:
+            print('\nLoading checkpoint ' + filename + '...')
 
         # Load the specific checkpoint
         state = torch.load(filename)
@@ -727,7 +734,8 @@ class LFADS(nn.Module):
                     # Update the last decay epoch.
                     self.last_decay_epoch = epoch
 
-                    print('\n\tLearning rate decreased to %.8f' % self.lr)
+                    if self.verbose:
+                        print('\n\tLearning rate decreased to %.8f' % self.lr)
 
     def _gp_to_normal(self, prior_gp: Dict[Tensor, Tensor], process: Tensor):
         """
