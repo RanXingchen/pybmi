@@ -1037,6 +1037,9 @@ class BMIReader():
         motion, neural, spikes, = [], [], []
         labels, target = [], []
 
+        # Record each trial's index
+        self.trial_index = []
+
         max_len = 0
         # Count the statistics behavior of the data
         for i, label in enumerate(self.binned_labels):
@@ -1059,6 +1062,8 @@ class BMIReader():
                 # Get the max len
                 if max_len < len(bstamp[-1]):
                     max_len = len(bstamp[-1])
+                # Current trial index.
+                self.trial_index.append([trial_start, i])
         # Stack all trials to one ndarray. Use padding value to pad the trials
         # which lenght smaller than max_len.
 
