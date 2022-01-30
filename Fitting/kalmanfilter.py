@@ -32,38 +32,14 @@ class KalmanFilter():
 
     Parameters
     ----------
-    Z : ndarray or tensor, shape (T, N)
-        The measurement matrix which is used to calculate the
-        models, where N means the feature dimensions of the
-        measurement. In BCI application, it should be the X's
-        corresponding neural data.
-    X : ndarray or tensor, shape (T, M)
-        The state matrix which is used to calculate the models,
-        where T means the time steps and M means the feature
-        dimensions. In the BCI application, it can be the
-        movement or other behavior data.
-
-    Attributes
-    ----------
-    A : tensor, shape (M, M)
-        Model describing state transition between time steps.
-        Specify the transition of state between times as an M-by-M
-        matrix. This attribute cannot be changed once the Kalman
-        filter is trained.
-    H : tensor, shape (N, M)
-        Model describing state to measurement transformation.
-        Specify the transition from state to measurement as an N-by-M
-        matrix. This attribute cannot be changed once the Kalman
-        filter is trained.
-    P : tensor, shape (M, M)
-        State estimation error covariance. Specify the covariance
-        of the state estimation error as an M-by-M diagonal matrix.
-    Q : tensor, shape (M, M)
-        Process noise covariance. Specify the covariance of process
-        noise as an M-by-M matrix.
-    R : tensor, shape (N, N)
-        Measurement noise covariance. Specify the covariance of
-        measurement noise as an N-by-N matrix.
+    fast_compute : bool, optional
+        If fast compute is True, use the torch.linalg.lstsq function to
+        compute the matrix needed, this method is not support to compute the
+        gradient. Otherwise, manually computing the function by inverse.
+    eps : float, optional
+        In case of during the computation, X'X is not full rank,
+        the eps is added on the diagnol of the covariance matrix
+        to make sure it always have inverse matrix.
 
     Examples
     --------
@@ -75,7 +51,48 @@ class KalmanFilter():
         SAB’02-workshop on motor control in humans and robots: On the
         interplay of real brains and artificial devices.
     """
+    def __init__(self, fast_compute=True, eps=1e-8):
+
+        self.fast_compute = fast_compute
+        self.eps = eps
+
     def train(self, Z, X):
+        """
+        Parameters
+        ----------
+        Z : ndarray or tensor, shape (T, N)
+            The measurement matrix which is used to calculate the
+            models, where N means the feature dimensions of the
+            measurement. In BCI application, it should be the X's
+            corresponding neural data.
+        X : ndarray or tensor, shape (T, M)
+            The state matrix which is used to calculate the models,
+            where T means the time steps and M means the feature
+            dimensions. In the BCI application, it can be the
+            movement or other behavior data.
+
+        Attributes
+        ----------
+        A : tensor, shape (M, M)
+            Model describing state transition between time steps.
+            Specify the transition of state between times as an M-by-M
+            matrix. This attribute cannot be changed once the Kalman
+            filter is trained.
+        H : tensor, shape (N, M)
+            Model describing state to measurement transformation.
+            Specify the transition from state to measurement as an N-by-M
+            matrix. This attribute cannot be changed once the Kalman
+            filter is trained.
+        P : tensor, shape (M, M)
+            State estimation error covariance. Specify the covariance
+            of the state estimation error as an M-by-M diagonal matrix.
+        Q : tensor, shape (M, M)
+            Process noise covariance. Specify the covariance of process
+            noise as an M-by-M matrix.
+        R : tensor, shape (N, N)
+            Measurement noise covariance. Specify the covariance of
+            measurement noise as an N-by-N matrix.
+        """
         assert X.shape[0] == Z.shape[0], \
             'The state and measurement should have same number of time points!'
 
@@ -86,12 +103,24 @@ class KalmanFilter():
             X = torch.from_numpy(X)
 
         t, m = X.shape
+        if not self.fast_compute:
+            eye = torch.eye(m, device=X.device, dtype=X.dtype)
+            eps = eye * self.eps
 
         X1, X2 = X[:-1], X[1:]
-        # State Transition Model
-        self.A = torch.linalg.lstsq(X1, X2)[0].T
-        # Measurement Model
-        self.H = torch.linalg.lstsq(X, Z)[0].T
+
+        if self.fast_compute:
+            # State Transition Model
+            self.A = torch.linalg.lstsq(X1, X2)[0].T
+            # Measurement Model
+            self.H = torch.linalg.lstsq(X, Z)[0].T
+        else:
+            # State Transition Model
+            self.A = torch.matmul(X2.T.matmul(X1),
+                                  torch.pinverse(X1.T.matmul(X1) + eps))
+            # Measurement Model
+            self.H = torch.matmul(Z.T.matmul(X),
+                                  torch.pinverse(X.T.matmul(X) + eps))
         # Process Noise
         e_sta = X2.T - torch.matmul(self.A, X1.T)
         self.W = torch.matmul(e_sta, e_sta.T) / (t - 1)
@@ -150,7 +179,11 @@ class KalmanFilter():
             Pt = torch.matmul(torch.matmul(self.A, Pt), self.A.T) + self.W
             # Calculate Kalman gain of current step
             residual = torch.matmul(self.H.matmul(Pt), self.H.T) + self.Q
-            Kt = torch.linalg.lstsq(residual.T, self.H.matmul(Pt.T))[0].T
+            if self.fast_compute:
+                Kt = torch.linalg.lstsq(residual.T, self.H.matmul(Pt.T))[0].T
+            else:
+                Kt = torch.matmul(Pt.matmul(self.H.T),
+                                  torch.pinverse(residual))
             # Update the estimation by measurement.
             # * Do not use inplace operation.
             xt = xt + torch.matmul(Kt, zt.T - torch.matmul(self.H, xt.T)).T
