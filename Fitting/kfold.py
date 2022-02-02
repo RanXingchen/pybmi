@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 
+from tqdm import tqdm
+
 
 def kfold(trainx, trainy, nfold, func, *arg):
     """
@@ -46,7 +48,7 @@ def kfold(trainx, trainy, nfold, func, *arg):
         # The number of validation data points in each fold
         len_eval_inp = trainx.shape[0] // nfold
         len_eval_trg = trainy.shape[0] // nfold
-        for k in range(nfold):
+        for k in tqdm(range(nfold), desc=f'Running {nfold} fold cv'):
             # Mark the index of validation data to True to split them.
             idx_eval_inp = np.zeros(trainx.shape[0], dtype=np.bool)
             idx_eval_inp[k * len_eval_inp:(k + 1) * len_eval_inp] = True
