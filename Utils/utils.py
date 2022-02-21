@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import os
 import tkinter
+import re
+from decimal import Decimal
 
 from dateutil.parser import parse
 
@@ -158,6 +160,28 @@ def find_padding_index(data: torch.Tensor, padding_value):
     else:
         raise ValueError("Unsupported type of padding value.")
     return iPad
+
+
+def t2s(timestr: str, decimal_place=3) -> Decimal:
+    """
+    Convert text format time to second.
+    """
+    unit = str(1 / pow(10, decimal_place))
+
+    if not re.search(':', timestr):
+        return Decimal(timestr)
+
+    time = re.split(':', timestr)
+    sec = Decimal('0')
+    for n, i in enumerate(range(len(time), 0, -1)):
+        # Check if the time string has decimal
+        if re.search(r'\.', time[i - 1]):
+            time_ = re.split(r'\.', time[i - 1])
+            sec += (Decimal(time_[0]) + Decimal(time_[1]) *
+                    Decimal(unit)) * pow(60, n)
+        else:
+            sec += Decimal(time[i - 1]) * pow(60, n)
+    return sec
 
 
 class Array2mat():
