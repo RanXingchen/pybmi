@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 from pybmi.utils.utils import check_params
 
@@ -40,15 +41,23 @@ class Smooth():
 
         Parameters
         ----------
-        y : ndarray
+        y : ndarray or Tensor
             The input data will be smoothed. The shape of Y should be
             [T, D], where T is the length, and D is the feature dimension.
 
         Returns
         -------
-        smoothed : ndarray
+        smoothed : ndarray or Tensor
             The smoothed data of y.
         """
+        if isinstance(y, torch.Tensor):
+            istensor = True
+            device = y.device
+            dtype = y.dtype
+            y = y.detach().cpu().numpy()
+        else:
+            istensor = False
+
         smoothed = y.copy()
         if self.method == 'moving':
             for n, i in enumerate(y.T):
@@ -59,4 +68,7 @@ class Smooth():
                 beg = np.cumsum(i[:self.span - 1])[::2] / r
                 end = (np.cumsum(i[:-self.span:-1])[::2] / r)[::-1]
                 smoothed[:, n] = np.concatenate((beg, ii, end))
+
+        if istensor:
+            smoothed = torch.tensor(smoothed, dtype=dtype).to(device)
         return smoothed
