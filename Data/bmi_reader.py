@@ -4,11 +4,13 @@ import array
 import time
 import scipy.io as scio
 
-from joblib import Parallel, delayed
 from struct import unpack
 from pybmi.data.brPY.brpylib import NsxFile, NevFile
 from pybmi.utils.utils import npc_remove, check_params, check_file
 from pybmi.signals.spectrogram import pmtm, tfrscalo
+from multiprocessing import Pool
+from tqdm import tqdm
+from functools import partial
 
 
 class BMIReader():
@@ -934,11 +936,15 @@ class BMIReader():
 
             step = int(self.header['fs_neural'] * self.neu_binsize)
             nbins = N // step
+            # Prepare the input data to pmtm.
+            input = [x[n * step:(n + 1) * step] for n in range(nbins)]
             # MTM PSD estimation.
-            r = Parallel(n_jobs=self.njobs)(delayed(pmtm)(
-                x[n * step:(n + 1) * step], self.pmtm['nw'], self.pmtm['nfft'],
-                self.header['fs_neural']) for n in range(nbins)
-            )
+            with Pool(processes=self.njobs) as pool:
+                iter = pool.imap(
+                    partial(pmtm, NW=self.pmtm['nw'], nfft=self.pmtm['nfft'],
+                            fs=self.header['fs_neural']), input
+                )
+                r = list(tqdm(iter, 'Processing', total=nbins, unit='bin'))
             # Get the correct shape of PSD, [n_bins, channel_count, frequency]
             Pxx, f = zip(*r)
             Pxx, f = np.stack(Pxx, axis=0), f[0]
