@@ -3,3 +3,4 @@ from .cov import cov                            # noqa
 from .factorsrotation import RotateFactors      # noqa
 from .PCA import PCA                            # noqa
 from . import statistics                        # noqa
+from .welford import Welford                    # noqa
