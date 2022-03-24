@@ -4,3 +4,4 @@ from .factorsrotation import RotateFactors      # noqa
 from .PCA import PCA                            # noqa
 from .statistics import *                       # noqa
 from .welford import Welford                    # noqa
+from .feat_selection import feature_selection   # noqa
