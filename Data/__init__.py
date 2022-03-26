@@ -6,6 +6,7 @@ from .HTK import HTKFile
 from .htk_dataset import HTKDataset
 from .seq_preprocess import SequencePreprocessor
 from . import augmentation
+from .dataset_utils import *                        # noqa
 
 
 __all__ = [
