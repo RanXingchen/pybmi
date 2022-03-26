@@ -1,4 +1,6 @@
 import torch.nn as nn
+import torch
+import torch.nn.functional as F
 
 from torch import Tensor
 from pybmi.utils import check_params
@@ -72,3 +74,43 @@ class GaussianKLDivLoss(nn.Module):
             return kl_loss.sum()
         else:
             return kl_loss.mean(dim=0).sum()
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss: https://arxiv.org/abs/1708.02002
+    """
+    def __init__(self, alpha: Tensor, gamma=2, reduction='mean'):
+        """
+        Parameters
+        ----------
+        alpha : Tensor, optional
+            The weight of classes. Each represent the the weight of one class.
+        gamma : float, optional
+            The attenuation factor of the probability. Used to balance the
+            weight of difficult and easy samples. Gamma is more important
+            than alpha, the larger of gamma, the smaller of alpha.
+        """
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, x: Tensor, labels: Tensor):
+        """
+        Usage is same as nn.CrossEntropyLoss:
+        >>> criteria = FocalLoss()
+        >>> logits = torch.randn(8, 19, 384, 384)
+        >>> lbs = torch.randint(0, 2, (8, 19, 384, 384)).float()
+        >>> loss = criteria(logits, lbs)
+        """
+        ce_loss = F.cross_entropy(x, labels, reduction='none')
+        pt = torch.exp(-ce_loss)
+        loss = self.alpha.gather(0, labels) * (1 - pt) ** self.gamma * ce_loss
+
+        if self.reduction == 'none':
+            return loss
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss.mean()
