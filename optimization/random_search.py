@@ -5,7 +5,7 @@ import json
 
 
 class RandomSearch():
-    def __init__(self, params_grid: dict, max_iters: int = 500):
+    def __init__(self, params_grid: dict, max_iters: int = 500, bsmall=True):
         """
         Random search for the optimal hyper-parameters.
 
@@ -33,9 +33,10 @@ class RandomSearch():
         """
         self.params_grid = params_grid
         self.max_iters = max_iters
+        self.bsmall = bsmall
 
         # Recording the best parameters
-        self.best_score = np.Inf
+        self.best_score = np.Inf if bsmall else -np.Inf
         self.best_hyper_params = {}
         self.best_model = None
         self.best_iter = -1
@@ -73,7 +74,9 @@ class RandomSearch():
             # parameters as input. And it returns the models and cv scores.
             model, score = train_fn(hyper_params)
             # Update the best results.
-            if self.best_score > score:
+            res = self.best_score > score if self.bsmall else \
+                self.best_score < score
+            if res:
                 self.best_hyper_params = hyper_params
                 self.best_score = score
                 self.best_model = model
