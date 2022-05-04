@@ -70,7 +70,7 @@ class HTKFile:
         basickind : string
             Basic feature kind saved in the file.
         qualifiers :string
-            Feature options present in the file 
+            Feature options present in the file
         """
         with open(filename, 'rb') as f:
             header = f.read(12)
