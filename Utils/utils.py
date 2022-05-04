@@ -8,9 +8,10 @@ import re
 from decimal import Decimal
 
 from dateutil.parser import parse
+from typing import List
 
 
-def check_params(candidate, choices, arg_name):
+def check_params(candidate, choices: List, arg_name: str):
     """
     Check validation of input argument from a finite set
     of choices.
