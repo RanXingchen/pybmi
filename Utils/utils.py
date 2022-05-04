@@ -109,9 +109,9 @@ def is_date(string, fuzzy=False):
         return False
 
 
-def epoch_time(start_time: int, end_time: int):
+def elapsed_time(start_time: int, end_time: int):
     """
-    Computing the running time from the recorded TIME().
+    Computing the running time from the start to the end.
     """
     elapsed_time = end_time - start_time
     elapsed_mins = int(elapsed_time / 60)
