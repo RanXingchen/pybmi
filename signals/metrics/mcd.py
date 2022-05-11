@@ -4,6 +4,7 @@ import math
 
 ALPHA = 10 * math.sqrt(2) / math.log(10)
 
+
 def MCD(x: torch.Tensor, y: torch.Tensor, mask: torch.BoolTensor = None):
     """
     Computing mel-cepstral distortion for two same length sequences.

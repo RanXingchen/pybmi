@@ -162,7 +162,7 @@ class LFADS(nn.Module):
         self.optimizer = torch.optim.Adam(
             self.parameters(), lr=self.lr, eps=self.epsilon, betas=self.betas
         )
-        self.gkl_criterion = bmi.optimization.loss.GaussianKLDivLoss('sum')
+        self.gkl_criterion = bmi.optimization.losses.GaussianKLDivLoss('sum')
         self.rec_criteria = nn.PoissonNLLLoss(
             log_input=False, full=True, reduction='sum'
         )
