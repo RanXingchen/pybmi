@@ -2,13 +2,12 @@ from . import brPY
 from .bmi_reader import BMIReader
 from .context import Context
 from .HTK import HTKFile
-from . import augmentation
+from .data_augmentation import AUGMENT_FNS          # noqa
 
 
 __all__ = [
     'brPY',
     'BMIReader',
     'Context',
-    'HTKFile',
-    'augmentation'
+    'HTKFile'
 ]
