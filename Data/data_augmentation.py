@@ -139,11 +139,52 @@ def shuffle(x: Tensor, nsegs=3, seg_min_nfeat=50):
     return _x
 
 
+def time_shift(x: Tensor):
+    """
+    Shift the input data along the time axis at random.
+
+    Parameters
+    ----------
+    x : Tensor
+        The input data used to shift alone time axis. It has a
+        shape of [nsample, nfeature] or [nbatch, nsample, nfeature].
+
+    Returns
+    -------
+    shifted_x : Tensor
+        The time shifted mcep tensor with the same shape of input.
+    """
+    # Check the number of dims of x, and expand the dimension to 3D if
+    # x is 2D tensor.
+    ndim_x = x.ndim
+    assert ndim_x == 2 or ndim_x == 3, \
+        "Wrong number of dimensions of the input data."
+
+    if ndim_x == 2:
+        x = x.unsqueeze(0)
+        unsqueezed = True
+    else:
+        unsqueezed = False
+
+    T = x.shape[1]
+    # Determine the length of shift.
+    nshift = torch.randint(low=0, high=T, size=(1,))
+
+    # Shift along the time axis.
+    shifted_x = torch.roll(x, nshift.item(), dims=0)
+
+    # Convert back the unsqueezed if True.
+    if unsqueezed:
+        shifted_x = shifted_x.squeeze(0)
+    return shifted_x
+
+
 AUGMENT_FNS = {
     'shuffle':      shuffle,
     'scaling':      scaling,
     'jittering':    jittering,
-    'mixup':        mixup
+    'mixup':        mixup,
+    'time_shift':   time_shift
 }
 
 
