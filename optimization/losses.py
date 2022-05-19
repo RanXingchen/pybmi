@@ -6,14 +6,6 @@ from torch import Tensor
 from pybmi.utils import check_params
 
 
-class _Loss(nn.Module):
-    reduction: str
-
-    def __init__(self, reduction: str = 'mean') -> None:
-        super(_Loss, self).__init__()
-        self.reduction = reduction
-
-
 class GaussianKLDivLoss(nn.Module):
     """
     log p(x|z) + KL(q||p) terms for Gaussian posterior and Gaussian prior. See
@@ -114,3 +106,52 @@ class FocalLoss(nn.Module):
             return loss.sum()
         else:
             return loss.mean()
+
+
+class LeCamLoss(nn.Module):
+    def __init__(self, decay=0.9, start_iter=1000):
+        """
+        Apply Lecam regularization for GAN's discriminator.
+
+        The method is discribed at the paper "Regularizing Generative
+        Adversarial Networks under Limited Data":
+        https://arxiv.org/pdf/2104.03310.pdf
+
+        This code is reference from https://github.com/google/lecam-gan.
+
+        Parameters
+        ----------
+        decay : float
+            Decay for the exponential moving average.
+        start_iter : int
+            Start iteration to apply lecam regularization.
+        """
+        super(LeCamLoss, self).__init__()
+        self.running_Dr = 0.0
+        self.running_Df = 0.0
+
+        self.decay = decay
+        self.start_iter = start_iter
+
+    def update(self, dr: float, df: float, iter):
+        """
+        Update the state of the exponential moving average.
+
+        Parameters
+        ----------
+        dr : float
+            The average value of discriminator output for the real data
+            of current iter.
+        df : float
+            The average value of discriminator output for the fake data
+            of current iter.
+        """
+        decay = 0.0 if iter < self.start_iter else self.decay
+
+        self.running_Dr = decay * self.running_Dr + (1 - decay) * dr
+        self.running_Df = decay * self.running_Df + (1 - decay) * df
+
+    def forward(self, D_real: Tensor, D_fake: Tensor):
+        loss = torch.mean(F.relu(D_real - self.running_Df).pow(2)) + \
+            torch.mean(F.relu(self.running_Dr - D_fake).pow(2))
+        return loss
