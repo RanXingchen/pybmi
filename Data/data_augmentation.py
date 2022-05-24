@@ -2,12 +2,12 @@ import torch
 # import math
 import numpy as np
 # import scipy.io as scio
-# import torchvision.transforms.functional as TF
+import torchvision.transforms.functional as TF
 # import warnings
 
 from torch import Tensor
 from torch.distributions.normal import Normal
-# from typing import List
+from typing import Tuple
 
 
 def mixup(x, y, alpha):
@@ -179,12 +179,52 @@ def time_shift(x: Tensor):
     return shifted_x
 
 
+def rotation(x: Tensor, grid_size: Tuple[int, int], nfreq: int,
+             max_degree: int = 15):
+    """
+    Rotate the Array of the electrodes.
+
+    Parameters
+    ----------
+    x : Tensor
+        The input neural data with shape of [nsample, nfeature].
+    grid_size : Tuple
+        The grid size of the neural data.
+    nfreq : int
+        The number of frequency bands of the neural data.
+    max_degree : int, optional
+        The rotate degree should be araged in [-max_degree, max_degree].
+        Default: 15.
+
+    Returns
+    -------
+    x : Tensor
+        The rotated neural data.
+    """
+    # Obtain a random rotate angle.
+    angle = torch.rand(1) * 2 * max_degree - max_degree
+
+    if angle == 0:
+        return x
+
+    H, W = grid_size    # Rows and columns of the grid.
+
+    assert H * W * nfreq == x.size(-1), \
+        'Error occored for the computation of neural array channels.'
+
+    x = x.reshape(-1, H * W, nfreq).permute(0, 2, 1).reshape(-1, nfreq, H, W)
+    x = TF.rotate(x, angle.item(), TF.InterpolationMode.BILINEAR)
+    x = x.reshape(-1, nfreq, H * W).permute(0, 2, 1).reshape(-1, H * W * nfreq)
+    return x.contiguous()
+
+
 AUGMENT_FNS = {
     'shuffle':      shuffle,
     'scaling':      scaling,
     'jittering':    jittering,
     'mixup':        mixup,
-    'time_shift':   time_shift
+    'time_shift':   time_shift,
+    'rotation':     rotation
 }
 
 
@@ -232,30 +272,6 @@ AUGMENT_FNS = {
 
 #             pos += temp.shape[0]
 #         return x_, y_
-
-#     def rotation(self, x: Tensor, max_degree=15):
-#         """
-#         Rotate the Array of the electrodes.
-#         """
-#         F = self.n_bands
-#         # Obtain a random rotate angle.
-#         angle = torch.rand(1) * 2 * max_degree - max_degree
-#         if angle == 0:
-#             return x
-
-#         # The total number of electrodes.
-#         N = self.w_array * self.h_array
-#         assert N * F == x.size(-1), \
-#             'Error occored for the computation of neural '\
-#             'array channels.'
-#         # Width and height of the array.
-#         W = self.w_array
-#         H = self.h_array
-
-#         x = x.reshape(-1, N, F).permute(0, 2, 1).reshape(-1, F, H, W)
-#         x = TF.rotate(x, angle.item(), TF.InterpolationMode.BILINEAR)
-#         x = x.reshape(-1, F, N).permute(0, 2, 1).reshape(-1, N * F)
-#         return x
 
 #     def padding(self, x: Tensor, padding: List[int] = None, fill=0,
 #                 mode='constant'):
