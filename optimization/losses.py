@@ -3,7 +3,9 @@ import torch
 import torch.nn.functional as F
 
 from torch import Tensor
+from torch.nn.modules.loss import _Loss
 from pybmi.utils import check_params
+from ..signals.metrics import ssim
 
 
 class GaussianKLDivLoss(nn.Module):
@@ -155,3 +157,106 @@ class LeCamLoss(nn.Module):
         loss = torch.mean(F.relu(D_real - self.running_Df).pow(2)) + \
             torch.mean(F.relu(self.running_Dr - D_fake).pow(2))
         return loss
+
+
+class SSIMLoss(_Loss):
+    """
+    Creates a criterion that measures the structural similarity index error
+    between each element in the input x and target y.
+
+    To match performance with skimage and tensorflow set 'downsample' = True.
+
+    This SSIM Loss is a copy from:
+    https://github.com/photosynthesis-team/piq
+
+    Parameters
+    ----------
+    kernel_size : int, optional
+        By default, the mean and covariance of a pixel is obtained by
+        convolution with given filter_size. Default: 11.
+    kernel_sigma : float, optional
+        Standard deviation for Gaussian kernel. Default: 1.5.
+    k1 : float, optional
+        Coefficient related to c1 in the above equation. Default: 0.01.
+    k2 : float, optional
+        Coefficient related to c2 in the above equation. Default: 0.03.
+    downsample : bool, optional
+        Perform average pool before SSIM computation. Default: True.
+    reduction : str, optional
+        Specifies the reduction type:
+        ``'none'`` | ``'mean'`` | ``'sum'``. Default:``'mean'``
+    max_value : float, optional
+        Maximum value range of images (usually 1.0 or 255). Default: 1.0.
+
+    Examples
+    --------
+    >>> loss = SSIMLoss()
+    >>> x = torch.rand(3, 3, 256, 256, requires_grad=True)
+    >>> y = torch.rand(3, 3, 256, 256)
+    >>> output = loss(x, y)
+    >>> output.backward()
+
+    References
+    ----------
+    Wang, Z., Bovik, A. C., Sheikh, H. R., & Simoncelli, E. P. (2004).
+    Image quality assessment: From error visibility to structural similarity.
+    IEEE Transactions on Image Processing, 13, 600-612.
+    https://ece.uwaterloo.ca/~z70wang/publications/ssim.pdf,
+    DOI:`10.1109/TIP.2003.819861`
+    """
+    __constants__ = ['kernel_size', 'k1', 'k2', 'sigma', 'kernel', 'reduction']
+
+    def __init__(self,
+                 kernel_size: int = 11,
+                 kernel_sigma: float = 1.5,
+                 k1: float = 0.01,
+                 k2: float = 0.03,
+                 downsample: bool = True,
+                 reduction: str = 'mean',
+                 max_value: float = 1.0) -> None:
+        super().__init__()
+
+        # Generic loss parameters.
+        self.reduction = reduction
+
+        # Loss-specific parameters.
+        self.kernel_size = kernel_size
+
+        # This check might look redundant because kernel size is checked
+        # within the ssim function anyway. However, this check allows to
+        # fail fast when the loss is being initialised and training has not
+        # been started.
+        assert kernel_size % 2 == 1, \
+            f'Kernel size must be odd, got [{kernel_size}]'
+
+        self.kernel_sigma = kernel_sigma
+        self.k1 = k1
+        self.k2 = k2
+        self.downsample = downsample
+        self.max_value = max_value
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        """
+        Computation of Structural Similarity (SSIM) index as a loss function.
+
+        Parameters
+        ----------
+        x : Tensor
+            An input tensor. Shape :math:`(N, C, H, W)`.
+        y : Tensor
+            A target tensor. Shape :math:`(N, C, H, W)`.
+
+        Returns
+        -------
+        Value of SSIM loss to be minimized, i.e ``1 - ssim`` in [0, 1] range.
+        """
+        score = ssim(x, y,
+                     kernel_size=self.kernel_size,
+                     kernel_sigma=self.kernel_sigma,
+                     downsample=self.downsample,
+                     max_value=self.max_value,
+                     reduction=self.reduction,
+                     full=False,
+                     k1=self.k1,
+                     k2=self.k2)
+        return torch.ones_like(score) - score
