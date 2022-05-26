@@ -316,6 +316,28 @@ def cutout(x: Tensor, ratio: float = 0.3):
     return x
 
 
+def rand_brightness(x: Tensor):
+    # Add uniform noise ranged from [-0.5, 0.5]
+    shape: Tensor = torch.ones(x.ndim, dtype=int)
+    shape[0] = x.size(0)
+    noise = torch.rand(*shape.tolist(), dtype=x.dtype, device=x.device) - 0.5
+    return x + noise
+
+
+def rand_contrast(x: Tensor):
+    assert x.ndim == 4 or x.ndim == 3, \
+        f"Error dim of input x, expected 3 or 4 dims, but got {x.ndim}."
+
+    x_mean = x.mean(dim=[1, 2, 3], keepdim=True) if x.ndim == 4 \
+        else x.mean(dim=[1, 2], keepdim=True)
+
+    shape: Tensor = torch.ones(x.ndim, dtype=int)
+    shape[0] = x.size(0)
+    noise = torch.rand(*shape.tolist(), dtype=x.dtype, device=x.device) + 0.5
+
+    return (x - x_mean) * noise + x_mean
+
+
 AUGMENT_FNS = {
     'shuffle':      shuffle,
     'scaling':      scaling,
@@ -324,7 +346,8 @@ AUGMENT_FNS = {
     'time_shift':   time_shift,
     'rotation':     rotation,
     'cutout':       cutout,
-    'translation':  rand_translation
+    'translation':  rand_translation,
+    'color':        [rand_brightness, rand_contrast]
 }
 
 
