@@ -171,7 +171,7 @@ def time_shift(x: Tensor):
     nshift = torch.randint(low=0, high=T, size=(1,))
 
     # Shift along the time axis.
-    shifted_x = torch.roll(x, nshift.item(), dims=0)
+    shifted_x = torch.roll(x, nshift.item(), dims=1)
 
     # Convert back the unsqueezed if True.
     if unsqueezed:
