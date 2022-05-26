@@ -153,8 +153,10 @@ cython_debug/
 
 
 
-.vscode/
+.vscode
 
-Test/*
+Test
+temp
 
 *.mat
+
