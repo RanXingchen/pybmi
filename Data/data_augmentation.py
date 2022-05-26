@@ -252,6 +252,7 @@ def rand_translation(x: Tensor, ratio: float = 0.125):
         torch.arange(N, dtype=torch.long),
         torch.arange(H, dtype=torch.long),
         torch.arange(W, dtype=torch.long),
+        indexing='ij'
     )
     grid_x = torch.clamp(grid_x + translation_x + 1, 0, H + 1)
     grid_y = torch.clamp(grid_y + translation_y + 1, 0, W + 1)
@@ -298,6 +299,7 @@ def cutout(x: Tensor, ratio: float = 0.3):
         torch.arange(N, dtype=torch.long),
         torch.arange(cutout_size[0], dtype=torch.long),
         torch.arange(cutout_size[1], dtype=torch.long),
+        indexing='ij'
     )
     grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2,
                          min=0, max=H - 1)
