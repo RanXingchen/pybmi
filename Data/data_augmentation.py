@@ -3,6 +3,7 @@ import torch
 import numpy as np
 # import scipy.io as scio
 import torchvision.transforms.functional as TF
+import torch.nn.functional as F
 # import warnings
 
 from torch import Tensor
@@ -218,13 +219,110 @@ def rotation(x: Tensor, grid_size: Tuple[int, int], nfreq: int,
     return x.contiguous()
 
 
+def rand_translation(x: Tensor, ratio: float = 0.125):
+    """
+    Random translation tensor x according the ratio.
+
+    Parameters
+    ----------
+    x : Tensor
+        The input data with shape of [N, C, H, W] or [N, H, W]. When input
+        data is 3D, the channel dimension will be unsqueezed to perform
+        calculation and then be squeezed before return.
+    ratio : float, optional
+        The ratio of the translation. Default: 0.125.
+    """
+    unsqueezed = False  # To indicate the channel dim squeezed or not.
+    if x.ndim == 4:
+        pass
+    elif x.ndim == 3:
+        x = x.unsqueeze(1)
+        unsqueezed = True
+    else:
+        raise RuntimeError("The shape of x should be 3D or 4D, "
+                           f"but got {x.ndim}!")
+
+    N, _, H, W = x.shape
+
+    shift_x, shift_y = int(H * ratio + 0.5), int(W * ratio + 0.5)
+    translation_x = torch.randint(-shift_x, shift_x + 1, size=[N, 1, 1])
+    translation_y = torch.randint(-shift_y, shift_y + 1, size=[N, 1, 1])
+
+    grid_batch, grid_x, grid_y = torch.meshgrid(
+        torch.arange(N, dtype=torch.long),
+        torch.arange(H, dtype=torch.long),
+        torch.arange(W, dtype=torch.long),
+    )
+    grid_x = torch.clamp(grid_x + translation_x + 1, 0, H + 1)
+    grid_y = torch.clamp(grid_y + translation_y + 1, 0, W + 1)
+
+    x_pad = F.pad(x, [1, 1, 1, 1, 0, 0, 0, 0])
+    x = x_pad.permute(0, 2, 3, 1).contiguous()[grid_batch, grid_x, grid_y].\
+        permute(0, 3, 1, 2).contiguous()
+
+    if unsqueezed:
+        x = x.squeeze(1)
+    return x
+
+
+def cutout(x: Tensor, ratio: float = 0.3):
+    """
+    Cutout a region according the ratio from original tensor x.
+
+    Parameters
+    ----------
+    x : Tensor
+        The input data with shape of [N, C, H, W] or [N, H, W]. When input
+        data is 3D, the channel dimension will be unsqueezed to perform
+        calculation and then be squeezed before return.
+    ratio : float, optional
+        The ratio of the cutout. Default: 0.3.
+    """
+    unsqueezed = False  # To indicate the channel dim squeezed or not.
+    if x.ndim == 4:
+        pass
+    elif x.ndim == 3:
+        x = x.unsqueeze(1)
+        unsqueezed = True
+    else:
+        raise RuntimeError("The shape of x should be 3D or 4D, "
+                           f"but got {x.ndim}!")
+
+    N, _, H, W = x.shape
+
+    cutout_size = int(H * ratio + 0.5), int(W * ratio + 0.5)
+    offset_x = torch.randint(0, H + (1 - cutout_size[0] % 2), size=[N, 1, 1])
+    offset_y = torch.randint(0, W + (1 - cutout_size[1] % 2), size=[N, 1, 1])
+
+    grid_batch, grid_x, grid_y = torch.meshgrid(
+        torch.arange(N, dtype=torch.long),
+        torch.arange(cutout_size[0], dtype=torch.long),
+        torch.arange(cutout_size[1], dtype=torch.long),
+    )
+    grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2,
+                         min=0, max=H - 1)
+    grid_y = torch.clamp(grid_y + offset_y - cutout_size[1] // 2,
+                         min=0, max=W - 1)
+
+    mask = torch.ones(N, H, W, dtype=x.dtype)
+    mask[grid_batch, grid_x, grid_y] = 0
+    # Apply cutout by the mask
+    x = x * mask.to(x.device).unsqueeze(1)
+
+    if unsqueezed:
+        x = x.squeeze(1)
+    return x
+
+
 AUGMENT_FNS = {
     'shuffle':      shuffle,
     'scaling':      scaling,
     'jittering':    jittering,
     'mixup':        mixup,
     'time_shift':   time_shift,
-    'rotation':     rotation
+    'rotation':     rotation,
+    'cutout':       cutout,
+    'translation':  rand_translation
 }
 
 
