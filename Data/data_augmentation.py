@@ -266,36 +266,53 @@ def rand_translation(x: Tensor, ratio: float = 0.125):
     return x
 
 
-def cutout(x: Tensor, ratio: float = 0.125):
+def cutout(x: Tensor, ratio: float = 0.5):
     """
-    Cutout a region according the ratio from original time series x.
+    Cutout a region according the ratio from original tensor x.
 
     Parameters
     ----------
     x : Tensor
-        The input data with shape of [N, T, F].
+        The input data with shape of [N, C, H, W] or [N, H, W]. When input
+        data is 3D, the channel dimension will be unsqueezed to perform
+        calculation and then be squeezed before return.
     ratio : float, optional
-        The ratio of the cutout. Default: 0.3.
+        The ratio of the cutout. Default: 0.5.
     """
-    N, T, F = x.shape
+    unsqueezed = False  # To indicate the channel dim squeezed or not.
+    if x.ndim == 4:
+        pass
+    elif x.ndim == 3:
+        x = x.unsqueeze(1)
+        unsqueezed = True
+    else:
+        raise RuntimeError("The shape of x should be 3D or 4D, "
+                           f"but got {x.ndim}!")
 
-    cutout_size = int(T * ratio + 0.5)
-    offset = torch.randint(0, T + (1 - cutout_size % 2), size=[N, 1, F])
+    N, _, H, W = x.shape
 
-    grid_batch, grid_t = torch.meshgrid(
+    cutout_size = int(H * ratio + 0.5), int(W * ratio + 0.5)
+    offset_x = torch.randint(0, H + (1 - cutout_size[0] % 2), size=[N, 1, 1])
+    offset_y = torch.randint(0, W + (1 - cutout_size[1] % 2), size=[N, 1, 1])
+
+    grid_batch, grid_x, grid_y = torch.meshgrid(
         torch.arange(N, dtype=torch.long),
-        torch.arange(cutout_size, dtype=torch.long),
+        torch.arange(cutout_size[0], dtype=torch.long),
+        torch.arange(cutout_size[1], dtype=torch.long),
         indexing='ij'
     )
-    grid_t = grid_t.unsqueeze(2).repeat((1, 1, F))
-    grid_t = torch.clamp(grid_t + offset - cutout_size // 2, min=0, max=T - 1)
+    grid_x = torch.clamp(grid_x + offset_x - cutout_size[0] // 2,
+                         min=0, max=H - 1)
+    grid_y = torch.clamp(grid_y + offset_y - cutout_size[1] // 2,
+                         min=0, max=W - 1)
 
-    mask = torch.ones(N, T, F, dtype=x.dtype)
-    for i in range(F):
-        # For each feature, cutout different time points.
-        mask[grid_batch, grid_t[:, :, i], i] = 0
+    mask = torch.ones(N, H, W, dtype=x.dtype)
+    mask[grid_batch, grid_x, grid_y] = 0
+    # Apply cutout by the mask
+    x = x * mask.to(x.device).unsqueeze(1)
 
-    x = x * mask.to(x.device)
+    if unsqueezed:
+        x = x.squeeze(1)
     return x
 
 
