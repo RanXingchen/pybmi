@@ -19,7 +19,7 @@ def global_variance_equalization(reference: Tensor, estimated: Tensor,
         Computing mean GV over all features or not. Default: False.
     """
     assert reference.shape == estimated.shape
-    
+
     if mean:
         gv_reference = ((reference - reference.mean()) ** 2).mean()
         gv_estimated = ((estimated - estimated.mean()) ** 2).mean()
